@@ -292,7 +292,7 @@ def remove_elements_tagged_for_removal(tree):
 
 
 def _get_templates_on_page(pagename):
-    pass
+    return []
 
 
 def _render_template(template):
@@ -373,7 +373,72 @@ def process_non_html_elements(html, pagename):
     return html
 
 
-def process_html(html, pagename=None):
+def grab_images(tree, page_id, pagename):
+    """
+    Traverse the tree and find images.  We replace, in the returned tree,
+    the image-related html with our image-related html.  We also mark the
+    images as to-be-created PageFiles for post-processing
+    """
+    from django.core.files.base import ContentFile
+    from pages.models import slugify, PageFile
+
+    # Get the list of images on this page
+    params = {
+        'action': 'query',
+        'prop': 'images',
+        'imlimit': 500,
+        'pageids': page_id,
+    }
+    req = api.APIRequest(site, params)
+    response = req.query()
+    imagelist_by_pageid = response['query']['pages']
+    # We're processing one page at a time, so just grab the first.
+    imagelist = imagelist_by_pageid[imagelist_by_pageid.keys()[0]]
+    if not 'images' in imagelist:
+        # Page doesn't have images.
+        return tree
+    images = imagelist['images']
+
+    for image_dict in images:
+        image_title = image_dict['title']
+        filename = image_title[len('File:'):]
+        # Get the image info for this image title
+        params = {
+            'action': 'query',
+            'prop': 'imageinfo',
+            'imlimit': 500,
+            'titles': image_title,
+            'iiprop': 'timestamp|user|url|dimensions|comment',
+        }
+        req = api.APIRequest(site, params)
+        response = req.query()
+        info_by_pageid = response['query']['pages']
+        # Doesn't matter what page it's on, we just want the info.
+        info = info_by_pageid[info_by_pageid.keys()[0]]
+        image_info = info['imageinfo'][0]
+        image_url = image_info['url']
+
+        # Get the full-size image binary and store it in a string.
+        img_ptr = urllib.URLopener()
+        img_tmp_f = open(img_ptr.retrieve(image_url)[0], 'r')
+        file_content = ContentFile(img_tmp_f.read())
+        img_tmp_f.close()
+        img_ptr.close()
+
+        # Create the PageFile and associate it with the current page.
+        print "..Creating image %s on page %s" % (filename, pagename)
+        pfile = PageFile(name=filename, slug=slugify(pagename))
+        pfile.file.save(filename, file_content, save=False)
+        pfile.save()
+
+        # For each image, find the image's supporting HTML in the tree
+        # and transform it to comply with our HTML.
+        pass
+
+    return tree
+
+
+def process_html(html, pagename=None, mw_page_id=None):
     """
     This is the real workhorse.  We take an html string which represents
     a rendered MediaWiki page and process bits and pieces of it, normalize
@@ -390,6 +455,7 @@ def process_html(html, pagename=None):
     tree = remove_edit_links(tree)
     tree = remove_headline_labels(tree)
     tree = throw_out_tags(tree)
+    tree = grab_images(tree, mw_page_id, pagename)
 
     tree = remove_elements_tagged_for_removal(tree)
     return _convert_to_string(tree)
@@ -426,7 +492,8 @@ def import_pages():
                 other_page.delete(track_changes=False)
 
         p = Page(name=mw_p.title, content=html)
-        p.content = process_html(p.content, p.name)
+        p.content = process_html(p.content, pagename=p.name,
+                                 mw_page_id=mw_p.pageid)
         p.clean_fields()
         p.save()
 
@@ -436,7 +503,7 @@ def clear_out_existing_data():
     A utility function that clears out existing pages, users, files,
     etc before running the import.
     """
-    from pages.models import Page
+    from pages.models import Page, PageFile
     from redirects.models import Redirect
 
     for p in Page.objects.all():
@@ -444,6 +511,13 @@ def clear_out_existing_data():
         p.delete(track_changes=False)
         for p_h in p.versions.all():
             p_h.delete()
+
+    for f in PageFile.objects.all():
+        print 'Clearing out', f
+        f.delete(track_changes=False)
+        for f_h in f.versions.all():
+            f_h.delete()
+
     for r in Redirect.objects.all():
         print 'Clearing out', r
         r.delete(track_changes=False)
