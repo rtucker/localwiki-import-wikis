@@ -373,11 +373,38 @@ def process_non_html_elements(html, pagename):
     return html
 
 
+def _fix_image_html(mw_img_title, filename, tree):
+    for elem in tree:
+        # Images start with something like this:
+        # <a href="/mediawiki-1.16.0/index.php/File:1009-Packard.jpg"
+        #    class="image">
+        for img_a in elem.findall(".//a[@class='image']"):
+            if img_a.attrib.get('href', '').endswith(mw_img_title):
+                # This is a link to the image with class image, so this is an
+                # image reference.
+
+                # Let's turn the image's <a> tag into the <span> tag with
+                # an <img> inside it.  And set all the attributes to the
+                # correct values.
+                # Our images look like this:
+                # <span class="image_frame image_frame_border">
+                #    <img src="_files/narwals.jpg"
+                #         style="width: 272px; height: 362px;">
+                # </span>
+                img_wrapper = img_a
+                img_wrapper.clear()
+                img_wrapper.tag = 'span'
+                img_wrapper.attrib['class'] = 'image_frame image_frame_border'
+                img = etree.Element("img")
+                img.attrib['src'] = "_files/%s" % filename
+                img_wrapper.append(img)
+    return tree
+
+
 def grab_images(tree, page_id, pagename):
     """
-    Traverse the tree and find images.  We replace, in the returned tree,
-    the image-related html with our image-related html.  We also mark the
-    images as to-be-created PageFiles for post-processing
+    Imports the images on a page as PageFile objects and fixes the page's
+    HTML to be what we want for images.
     """
     from django.core.files.base import ContentFile
     from pages.models import slugify, PageFile
@@ -433,7 +460,7 @@ def grab_images(tree, page_id, pagename):
 
         # For each image, find the image's supporting HTML in the tree
         # and transform it to comply with our HTML.
-        pass
+        tree = _fix_image_html(image_title, filename, tree)
 
     return tree
 
