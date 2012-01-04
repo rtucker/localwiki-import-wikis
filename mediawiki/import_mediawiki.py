@@ -374,10 +374,10 @@ def process_non_html_elements(html, pagename):
 
 
 def _fix_image_html(mw_img_title, filename, tree):
+    # Images start with something like this:
+    # <a href="/mediawiki-1.16.0/index.php/File:1009-Packard.jpg"
+    #    class="image">
     for elem in tree:
-        # Images start with something like this:
-        # <a href="/mediawiki-1.16.0/index.php/File:1009-Packard.jpg"
-        #    class="image">
         for img_a in elem.findall(".//a[@class='image']"):
             if img_a.attrib.get('href', '').endswith(mw_img_title):
                 # This is a link to the image with class image, so this is an
@@ -391,13 +391,75 @@ def _fix_image_html(mw_img_title, filename, tree):
                 #    <img src="_files/narwals.jpg"
                 #         style="width: 272px; height: 362px;">
                 # </span>
-                img_wrapper = img_a
+                extra_classes = ''
+                img_elem = img_a.find('img')
+                width = img_elem.attrib.get('width')
+                height = img_elem.attrib.get('height')
+                is_thumb = 'thumbimage' in img_elem.attrib.get('class', '')
+                caption = None
+                if is_thumb:
+                    img_wrapper = img_a.getparent().getparent()
+                else:
+                    img_wrapper = img_a
+
+                if is_thumb:
+                    # We use the parent's class info to figure out whether to
+                    # float the image left/right.
+                    #
+                    # The MediaWiki HTML looks like this:
+                    #
+                    # <div class="thumb tright">
+                    #   <div class="thumbinner" style="width:302px;">
+                    #     <a href="/index.php/File:Michigan-State-Telephone-Company.png" class="image">
+                    #       <img alt="" src="/mediawiki-1.16.0/images/thumb/d/dd/Michigan-State-Telephone-Company.png/300px-Michigan-State-Telephone-Company.png" width="300" height="272" class="thumbimage" />
+                    #     </a>
+                    #     <div class="thumbcaption">
+                    #        <div class="magnify"><a href="/mediawiki-1.16.0/index.php/File:Michigan-State-Telephone-Company.png" class="internal" title="Enlarge"><img src="/mediawiki-1.16.0/skins/common/images/magnify-clip.png" width="15" height="11" alt="" /></a>
+                    #        </div>
+                    #        <strong class="selflink">Michigan State Telephone Company</strong>
+                    #     </div>
+                    #   </div>
+                    # </div>
+                    if 'tright' in img_wrapper.attrib.get('class'):
+                        extra_classes += ' image_right'
+                    elif 'tleft' in img_wrapper.attrib.get('class'):
+                        extra_classes += ' image_left'
+                    # Does the image have a caption?
+                    caption = img_wrapper.find(".//div[@class='thumbcaption']")
+                    if caption is not None:
+                        magnify = caption.find(".//div[@class='magnify']")
+                        tail = magnify.tail
+                        caption.remove(magnify)
+                        if tail:
+                            caption.text = caption.text or ''
+                            caption.text += tail
+                        # MediaWiki creates a caption div even if the
+                        # image doesn't have a caption, so we have to
+                        # test to see if the div is empty here.
+                        if not (_convert_to_string(caption) or caption.text):
+                            # No caption content, so let's set caption
+                            # to None.
+                            caption = None
+                        # Caption is now clean.  Yay!
+
                 img_wrapper.clear()
                 img_wrapper.tag = 'span'
-                img_wrapper.attrib['class'] = 'image_frame image_frame_border'
+
+                img_wrapper.attrib['class'] = (
+                    'image_frame image_frame_border' + extra_classes)
                 img = etree.Element("img")
                 img.attrib['src'] = "_files/%s" % filename
+                if width and height:
+                    img.attrib['style'] = 'width: %spx; height: %spx;' % (
+                        width, height
+                    )
                 img_wrapper.append(img)
+                if caption is not None:
+                    caption.tag = 'span'
+                    caption.attrib['class'] = 'image_caption'
+                    caption.attrib['style'] = 'width: %spx;' % width
+                    img_wrapper.append(caption)
+
     return tree
 
 
@@ -494,7 +556,7 @@ def import_pages():
     request = api.APIRequest(site, {
         'action': 'query',
         'list': 'allpages',
-        'aplimit': '50',
+        'aplimit': '150',
     })
     print "Getting master page list (this may take a bit).."
     response_list = request.query(querycontinue=False)['query']['allpages']
