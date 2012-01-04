@@ -400,7 +400,12 @@ def _fix_image_html(mw_img_title, filename, tree):
                 if is_thumb:
                     img_wrapper = img_a.getparent().getparent()
                 else:
-                    img_wrapper = img_a
+                    # Is this a floated, non-thumbnailed image
+                    if (img_a.getparent() and
+                        'float' in img_a.getparent().attrib.get('class', '')):
+                        img_wrapper = img_a.getparent()
+                    else:
+                        img_wrapper = img_a
 
                 if is_thumb:
                     # We use the parent's class info to figure out whether to
@@ -441,6 +446,12 @@ def _fix_image_html(mw_img_title, filename, tree):
                             # to None.
                             caption = None
                         # Caption is now clean.  Yay!
+                else:
+                    # Can still be floated
+                    if 'floatright' in img_wrapper.attrib.get('class', ''):
+                        extra_classes += ' image_right'
+                    elif 'floatright' in img_wrapper.attrib.get('class', ''):
+                        extra_classes += ' image_left'
 
                 img_wrapper.clear()
                 img_wrapper.tag = 'span'
