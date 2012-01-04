@@ -1,3 +1,5 @@
+* Clean up grab_images code.  Ick!
+
 * Use http://127.0.0.1/mediawiki-1.16.0/api.php?action=query&prop=templates&titles=109%2C901
   to figure out what templates are being used on a given page, and then
   translate them to page includes.  This can be done for templates without

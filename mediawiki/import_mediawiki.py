@@ -538,6 +538,38 @@ def grab_images(tree, page_id, pagename):
     return tree
 
 
+def fix_indents(tree):
+    def _change_to_p():
+        # We replace the dl_parent with the dd_item
+        dl_parent.clear()
+        dl_parent.tag = 'p'
+        dl_parent.attrib['class'] = 'indent%s' % depth
+        for child in dd_item.iterchildren():
+            dl_parent.append(child)
+        dl_parent.text = dl_parent.text or ''
+        dl_parent.text += (dd_item.text or '')
+        dl_parent.tail = dl_parent.tail or ''
+        dl_parent.tail += (dd_item.tail or '')
+    for elem in tree:
+        in_dd = False
+        depth = 0
+        for item in elem.iter():
+            print 'item', item
+            if item.tag == 'dl' and not in_dd:
+                dl_parent = item
+            if item.tag == 'dd':
+                depth += 1
+                in_dd = True
+                dd_item = item
+            if in_dd and item.tag not in ('dd', 'dl'):
+                in_dd = False
+                _change_to_p()
+        if in_dd:
+            # Ended in dd
+            _change_to_p()
+    return tree
+
+
 def process_html(html, pagename=None, mw_page_id=None):
     """
     This is the real workhorse.  We take an html string which represents
@@ -556,6 +588,7 @@ def process_html(html, pagename=None, mw_page_id=None):
     tree = remove_headline_labels(tree)
     tree = throw_out_tags(tree)
     tree = grab_images(tree, mw_page_id, pagename)
+    tree = fix_indents(tree)
 
     tree = remove_elements_tagged_for_removal(tree)
     return _convert_to_string(tree)
