@@ -201,6 +201,8 @@ def _get_wiki_link(link):
                 pagename = title[:title.rfind('(') - 1]
             else:
                 pagename = title
+    if type(pagename) == unicode:
+        pagename = pagename.encode('utf-8')
 
     return pagename
 
@@ -433,8 +435,10 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree):
                     caption = img_wrapper.find(".//div[@class='thumbcaption']")
                     if caption is not None:
                         magnify = caption.find(".//div[@class='magnify']")
-                        tail = magnify.tail
-                        caption.remove(magnify)
+                        tail = ''
+                        if magnify:
+                            tail = magnify.tail
+                            caption.remove(magnify)
                         if tail:
                             caption.text = caption.text or ''
                             caption.text += tail
@@ -629,9 +633,7 @@ def import_pages():
         p = Page(name=mw_p.title, content=html)
         p.content = process_html(p.content, pagename=p.name,
                                  mw_page_id=mw_p.pageid)
-        print 'PROCESSED HTML', p.content
         p.clean_fields()
-        print 'CLEANED HTML', p.content
         p.save()
 
 
@@ -666,5 +668,5 @@ def run():
     clear_out_existing_data()
     import_users()
     import_pages()
-    #process_redirects()
-    #process_mapdata()
+    process_redirects()
+    process_mapdata()
