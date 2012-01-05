@@ -1,9 +1,17 @@
+import os
+import site
+import sys
 import unittest
 from lxml import etree
 import html5lib
 from html5lib import sanitizer
 
-from import_mediawiki import process_html
+from import_mediawiki import process_html, fix_image_html, SCRIPT_PATH
+
+import sapling
+site.addsitedir(os.path.abspath(os.path.split(sapling.__file__)[0]))
+from django.conf import settings
+os.environ["DJANGO_SETTINGS_MODULE"] = "sapling.settings"
 
 
 def _convert_to_string(l):
@@ -29,7 +37,7 @@ def is_html_equal(h1, h2):
 
 class TestHTMLNormalization(unittest.TestCase):
     def setUp(self):
-        pass
+        self.env = {'SCRIPT_PATH': SCRIPT_PATH}
 
     def test_internal_links(self):
         # Make sure we turn mediawiki internal links into our-style
@@ -37,20 +45,20 @@ class TestHTMLNormalization(unittest.TestCase):
 
         # A link to a page that doesn't exist.
         html = """<p>Some text here</p>
-<p>And now a link: <a href="/mediawiki-1.16.0/index.php?title=Waverly_Road&amp;action=edit&amp;redlink=1" class="new" title="Waverly Road (page does not exist)">Waverly Road</a> woo!</p>"""
+<p>And now a link: <a href="%(SCRIPT_PATH)s?title=Waverly_Road&amp;action=edit&amp;redlink=1" class="new" title="Waverly Road (page does not exist)">Waverly Road</a> woo!</p>""" % self.env
         expected_html = """<p>Some text here</p>
 <p>And now a link: <a href="Waverly%20Road">Waverly Road</a> woo!</p>"""
         self.assertTrue(is_html_equal(process_html(html), expected_html))
 
         # A link to a page that does exist.
         html = """<p>Some text here</p>
-<p>And now a link: <a href="/mediawiki-1.16.0/index.php/Ann_Arbor" title="Ann Arbor">Ann Arbor</a> woo!</p>"""
+<p>And now a link: <a href="%(SCRIPT_PATH)s/Ann_Arbor" title="Ann Arbor">Ann Arbor</a> woo!</p>""" % self.env
         expected_html = """<p>Some text here</p>
 <p>And now a link: <a href="Ann%20Arbor">Ann Arbor</a> woo!</p>"""
         self.assertTrue(is_html_equal(process_html(html), expected_html))
 
         # A link to a redirect in MW.
-        html = """<a href="/mediawiki-1.16.0/index.php/Ypsilanti" title="Ypsilanti" class="mw-redirect">Ypsilanti</a>"""
+        html = """<a href="%(SCRIPT_PATH)s/Ypsilanti" title="Ypsilanti" class="mw-redirect">Ypsilanti</a>""" % self.env
         expected_html = """<a href="Ypsilanti">Ypsilanti</a>"""
 
     def test_fix_i_b_tags(self):
@@ -64,7 +72,7 @@ class TestHTMLNormalization(unittest.TestCase):
         self.assertTrue(is_html_equal(process_html(html), expected_html))
 
     def test_remove_edit_labels(self):
-        html = """<h2><span class="editsection">[<a href="/mediawiki-1.16.0/index.php?title=After-hours_emergency&amp;action=edit&amp;section=2" title="Edit section: Water">edit</a>]</span> <span class="mw-headline" id="Water"> Water </span></h2>"""
+        html = """<h2><span class="editsection">[<a href="%(SCRIPT_PATH)s?title=After-hours_emergency&amp;action=edit&amp;section=2" title="Edit section: Water">edit</a>]</span> <span class="mw-headline" id="Water"> Water </span></h2>""" % self.env
         expected_html = """<h2>Water</h2>"""
         self.assertTrue(is_html_equal(process_html(html), expected_html))
 
