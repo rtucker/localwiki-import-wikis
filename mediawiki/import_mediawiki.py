@@ -575,6 +575,31 @@ def fix_indents(tree):
     return tree
 
 
+def remove_toc(tree):
+    """
+    Remove the table of contents table.
+    """
+    for elem in tree:
+        if elem.tag == 'table' and elem.attrib.get('id') == 'toc':
+            elem.tag = 'removeme'
+        toc = elem.find(".//table[@id='toc']")
+        if toc:
+            toc.tag = 'removeme'
+    return tree
+
+
+def remove_script_tags(tree):
+    """
+    Remove script tags.
+    """
+    for elem in tree:
+        if elem.tag == 'script':
+            elem.tag = 'removeme'
+        for script in elem.findall(".//script"):
+            script.tag = 'removeme'
+    return tree
+
+
 def process_html(html, pagename=None, mw_page_id=None):
     """
     This is the real workhorse.  We take an html string which represents
@@ -592,6 +617,8 @@ def process_html(html, pagename=None, mw_page_id=None):
     tree = remove_edit_links(tree)
     tree = remove_headline_labels(tree)
     tree = throw_out_tags(tree)
+    tree = remove_toc(tree)
+    tree = remove_script_tags(tree)
     if pagename is not None and mw_page_id:
         tree = grab_images(tree, mw_page_id, pagename)
     tree = fix_indents(tree)
