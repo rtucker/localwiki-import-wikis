@@ -86,6 +86,46 @@ class TestHTMLNormalization(unittest.TestCase):
         expected_html = """<p>stuff</p>"""
         self.assertTrue(is_html_equal(process_html(html, "Test pagename"), expected_html))
 
+    def test_image_html_fixing(self):
+        mw_img_title = 'File:1873-Walling-map-excerpt.png'
+        quoted_mw_img_title = 'File:1873-Walling-map-excerpt.png'
+        filename = '1873-Walling-map-excerpt.png'
+        html = """<div class="thumb tright"><div class="thumbinner" style="width:302px;"><a href="%(SCRIPT_PATH)s/File:1873-Walling-map-excerpt.png" class="image"><img alt="" src="/mediawiki-1.16.0/images/thumb/b/b1/1873-Walling-map-excerpt.png/300px-1873-Walling-map-excerpt.png" width="300" height="296" class="thumbimage" /></a>  <div class="thumbcaption"><div class="magnify"><a href="%(SCRIPT_PATH)s/File:1873-Walling-map-excerpt.png" class="internal" title="Enlarge"><img src="/mediawiki-1.16.0/skins/common/images/magnify-clip.png" width="15" height="11" alt="" /></a></div>Ann Arbor <b>Township</b> portion of 1873 Walling map via David Rumsey <a href="%(SCRIPT_PATH)s?title=Historical_Map_Collection&amp;action=edit&amp;redlink=1" class="new" title="Historical Map Collection (page does not exist)">Historical Map Collection</a></div></div></div>
+<p>Map of Washtenaw County, Michigan. Drawn, compiled, and edited by <a href="%(SCRIPT_PATH)s/H.F._Walling" title="H.F. Walling" class="mw-redirect">H.F. Walling</a>, C.E. ... Published by R.M. &amp; S.T. Tackabury, Detroit, Mich. Entered ... 1873, by H.F. Walling ... Washington. The Claremont Manufacturing Company, Claremont, N.H., Book Manufacturers
+</p>""" % self.env
+        p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            namespaceHTMLElements=False)
+        tree = p.parseFragment(html, encoding='UTF-8')
+        fixed_tree = fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
+        fixed_html = _convert_to_string(fixed_tree)
+        expected_html = """<span class="image_frame image_frame_border image_right"><img src="_files/1873-Walling-map-excerpt.png" style="width: 300px; height: 296px;"/><span class="image_caption" style="width: 300px;">Ann Arbor <b>Township</b> portion of 1873 Walling map via David Rumsey <a href="%(SCRIPT_PATH)s?title=Historical_Map_Collection&amp;action=edit&amp;redlink=1" class="new" title="Historical Map Collection (page does not exist)">Historical Map Collection</a></span></span><p>Map of Washtenaw County, Michigan. Drawn, compiled, and edited by <a href="%(SCRIPT_PATH)s/H.F._Walling" class="mw-redirect" title="H.F. Walling">H.F. Walling</a>, C.E. ... Published by R.M. &amp; S.T. Tackabury, Detroit, Mich. Entered ... 1873, by H.F. Walling ... Washington. The Claremont Manufacturing Company, Claremont, N.H., Book Manufacturers
+</p>""" % self.env
+        self.assertTrue(is_html_equal(fixed_html, expected_html))
+
+        mw_img_title = 'File:Ritz Camera.jpg'
+        quoted_mw_img_title = 'File:Ritz_Camera.jpg'
+        filename = 'Ritz Camera.jpg'
+        html = """<div class="thumb tright"><div class="thumbinner" style="width:252px;"><a href="/mediawiki-1.16.0/index.php/File:Ritz_Camera.jpg" class="image"><img alt="" src="/mediawiki-1.16.0/images/thumb/e/ec/Ritz_Camera.jpg/250px-Ritz_Camera.jpg" width="250" height="279" class="thumbimage" /></a>  <div class="thumbcaption"><div class="magnify"><a href="/mediawiki-1.16.0/index.php/File:Ritz_Camera.jpg" class="internal" title="Enlarge"><img src="/mediawiki-1.16.0/skins/common/images/magnify-clip.png" width="15" height="11" alt="" /></a></div>The front of 318 S. State St.</div></div></div>
+<p>318 S. State St. is the current home of <a href="/mediawiki-1.16.0/index.php/7-Eleven" title="7-Eleven">7-Eleven</a>; it was previously occupied by <a href="/mediawiki-1.16.0/index.php/Ritz_Camera" title="Ritz Camera">Ritz Camera</a>.
+</p>
+<h2><span class="editsection">[<a href="/mediawiki-1.16.0/index.php?title=318_S._State_St.&amp;action=edit&amp;section=1" title="Edit section: In the news">edit</a>]</span> <span class="mw-headline" id="In_the_news"> In the news </span></h2>
+<ul><li> <a href="http://www.annarbor.com/business-review/ann-arbors-ex-ritz-camera-building-on-south-state-sold-in-1305m-deal/" class="external free" rel="nofollow">http://www.annarbor.com/business-review/ann-arbors-ex-ritz-camera-building-on-south-state-sold-in-1305m-deal/</a>
+</li></ul>"""
+        expected_html = """<span class="image_frame image_frame_border image_right"><img src="_files/Ritz Camera.jpg" style="width: 250px; height: 279px;"/><span class="image_caption" style="width: 250px;">The front of 318 S. State St.</span></span><p>318 S. State St. is the current home of <a href="/mediawiki-1.16.0/index.php/7-Eleven" title="7-Eleven">7-Eleven</a>; it was previously occupied by <a href="/mediawiki-1.16.0/index.php/Ritz_Camera" title="Ritz Camera">Ritz Camera</a>.
+</p>
+<h2><span class="editsection">[<a href="/mediawiki-1.16.0/index.php?title=318_S._State_St.&amp;action=edit&amp;section=1" title="Edit section: In the news">edit</a>]</span> <span class="mw-headline" id="In_the_news"> In the news </span></h2>
+<ul><li> <a href="http://www.annarbor.com/business-review/ann-arbors-ex-ritz-camera-building-on-south-state-sold-in-1305m-deal/" class="external free" rel="nofollow">http://www.annarbor.com/business-review/ann-arbors-ex-ritz-camera-building-on-south-state-sold-in-1305m-deal/</a>
+</li></ul>"""
+        p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            namespaceHTMLElements=False)
+        tree = p.parseFragment(html, encoding='UTF-8')
+        fixed_tree = fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
+        fixed_html = _convert_to_string(fixed_tree)
+
+        self.assertTrue(is_html_equal(fixed_html, expected_html))
+
 
 def run():
     unittest.main()

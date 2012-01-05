@@ -373,13 +373,13 @@ def process_non_html_elements(html, pagename):
     return html
 
 
-def _fix_image_html(mw_img_title, filename, tree):
+def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree):
     # Images start with something like this:
     # <a href="/mediawiki-1.16.0/index.php/File:1009-Packard.jpg"
     #    class="image">
     for elem in tree:
         for img_a in elem.findall(".//a[@class='image']"):
-            if img_a.attrib.get('href', '').endswith(mw_img_title):
+            if img_a.attrib.get('href', '').endswith(quoted_mw_img_title):
                 # This is a link to the image with class image, so this is an
                 # image reference.
 
@@ -517,6 +517,8 @@ def grab_images(tree, page_id, pagename):
         info = info_by_pageid[info_by_pageid.keys()[0]]
         image_info = info['imageinfo'][0]
         image_url = image_info['url']
+        image_description_url = image_info['descriptionurl']
+        quoted_image_title = urlsplit(image_description_url).path.split('/')[-1]
 
         # Get the full-size image binary and store it in a string.
         img_ptr = urllib.URLopener()
@@ -533,7 +535,7 @@ def grab_images(tree, page_id, pagename):
 
         # For each image, find the image's supporting HTML in the tree
         # and transform it to comply with our HTML.
-        tree = _fix_image_html(image_title, filename, tree)
+        tree = fix_image_html(image_title, quoted_image_title, filename, tree)
 
     return tree
 
@@ -554,7 +556,6 @@ def fix_indents(tree):
         in_dd = False
         depth = 0
         for item in elem.iter():
-            print 'item', item
             if item.tag == 'dl' and not in_dd:
                 dl_parent = item
             if item.tag == 'dd':
@@ -587,7 +588,8 @@ def process_html(html, pagename=None, mw_page_id=None):
     tree = remove_edit_links(tree)
     tree = remove_headline_labels(tree)
     tree = throw_out_tags(tree)
-    tree = grab_images(tree, mw_page_id, pagename)
+    if pagename is not None and mw_page_id:
+        tree = grab_images(tree, mw_page_id, pagename)
     tree = fix_indents(tree)
 
     tree = remove_elements_tagged_for_removal(tree)
@@ -600,13 +602,13 @@ def import_pages():
     request = api.APIRequest(site, {
         'action': 'query',
         'list': 'allpages',
-        'aplimit': '150',
+        'aplimit': '250',
     })
     print "Getting master page list (this may take a bit).."
     response_list = request.query(querycontinue=False)['query']['allpages']
     pages = pagelist.listFromQuery(site, response_list)
     print "Got master page list."
-    for mw_p in pages[:100]:
+    for mw_p in pages[:250]:
         print "Importing %s" % mw_p.title
         wikitext = mw_p.getWikiText()
         if mw_p.isRedir():
@@ -627,7 +629,9 @@ def import_pages():
         p = Page(name=mw_p.title, content=html)
         p.content = process_html(p.content, pagename=p.name,
                                  mw_page_id=mw_p.pageid)
+        print 'PROCESSED HTML', p.content
         p.clean_fields()
+        print 'CLEANED HTML', p.content
         p.save()
 
 
@@ -662,5 +666,5 @@ def run():
     clear_out_existing_data()
     import_users()
     import_pages()
-    process_redirects()
-    process_mapdata()
+    #process_redirects()
+    #process_mapdata()
