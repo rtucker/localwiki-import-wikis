@@ -629,7 +629,27 @@ def fix_image_galleries(tree):
         for image in item.findall(".//span"):
             if not 'image_frame' in image.attrib.get('class'):
                 continue
+            caption = image.getparent().getparent(
+                ).getparent().find(".//div[@class='gallerytext']")
+            # We have a gallery caption, so let's add it to our image
+            # span.
+            if caption:
+                img_style = image.find('img').attrib['style']
+                for css_prop in img_style.split(';'):
+                    if css_prop.startswith('width:'):
+                        width = css_prop
+                our_caption = etree.Element("span")
+                our_caption.attrib['class'] = 'image_caption'
+                our_caption.attrib['style'] = '%s;' % width
+                # Caption has an inner p, and we don't want that.
+                caption = caption.find('p')
+                for child in caption.iterchildren():
+                    our_caption.append(child)
+                text = caption.text or ''
+                our_caption.text = text
+                image.append(our_caption)
             p.append(image)
+
         item.tag = 'removeme'
         if len(list(p.iterchildren())):
             return p
@@ -693,6 +713,7 @@ def import_pages():
     pages = pagelist.listFromQuery(site, response_list)
     print "Got master page list."
     for mw_p in pages[:250]:
+        if mw_p.title != '201 N Huron Ypsilanti, MI': continue
         print "Importing %s" % mw_p.title
         wikitext = mw_p.getWikiText()
         if mw_p.isRedir():
