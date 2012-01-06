@@ -294,32 +294,63 @@ def remove_elements_tagged_for_removal(tree):
 
 
 def _get_templates_on_page(pagename):
-    return []
+    params = {
+        'action': 'query',
+        'prop': 'templates',
+        'titles': pagename,
+    }
+    req = api.APIRequest(site, params)
+    response = req.query()
+    pages = response['query']['pages']
+
+    if not pages:
+        return []
+
+    page_info = pages[pages.keys()[0]]
+    if not 'templates' in page_info:
+        return []
+
+    # There are some templates in use.
+    return [e['title'] for e in page_info['templates']]
 
 
-def _render_template(template):
-    pass
+def _render_template(template_name):
+    template_page = page.Page(site, title=template_name)
+    wikitext = template_page.getWikiText()
+    html = render_wikitext(template_name, wikitext)
+    return html
 
 
-def create_mw_template_as_page(template):
+def create_mw_template_as_page(template_name, template_html):
     """
     Create a page to hold the rendered template.
 
     Returns:
         String representing the pagename of the new include-able page.
     """
-    pass
+    from pages.models import Page, slugify
+
+    name_part = template_name[len('Template:'):]
+    # Keeping it simple for now.  We can namespace later if people want that.
+    include_name = name_part
+
+    if not Page.objects.filter(slug=slugify(include_name)):
+        mw_page = page.Page(site, title=template_name)
+        p = Page(name=include_name)
+        p.content = process_html(template_html, pagename=template_name,
+                                 mw_page_id=mw_page.pageid)
+        p.clean_fields()
+        p.save()
+
+    return include_name
 
 
-def replace_mw_templates_with_includes(html, pagename):
+def replace_mw_templates_with_includes(tree, pagename):
     """
     Replace {{templatethings}} inside of pages with our page include plugin.
 
     We can safely do this when the template doesn't have any arguments.
     When it does have arguments we just import it as raw HTML for now.
-
-    Returns:
-        html string.
     """
     # We use the API to figure out what templates are being used on a given
     # page, and then translate them to page includes.  This can be done for
@@ -330,23 +361,42 @@ def replace_mw_templates_with_includes(html, pagename):
     # resulting HTML to the HTML inside the rendered page.  If it's identical,
     # then we know we can replace it with an include.
 
+    def _normalize_html(s):
+        p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            namespaceHTMLElements=False)
+        tree = p.parseFragment(s, encoding='UTF-8')
+        return _convert_to_string(tree)
+
+    # Finding and replacing is easiest if we convert the tree to
+    # HTML and then back again.  Maybe there's a better way?
+
+    html = _convert_to_string(tree)
     templates = _get_templates_on_page(pagename)
     for template in templates:
-        template_html = _render_template(template)
+        template_html = _normalize_html(_render_template(template))
         if template_html in html:
             # It's an include-style template.
-            include_pagename = create_mw_template_as_page(template)
+            include_pagename = create_mw_template_as_page(template,
+                template_html)
+            include_classes = ''
             include_html = (
                 '<a href="%(quoted_pagename)s" '
                  'class="plugin includepage%(include_classes)s">'
                  'Include page %(pagename)s'
                 '</a>' % {
                     'quoted_pagename': urllib.quote(include_pagename),
-                    'pagename': include_pagename}
+                    'pagename': include_pagename,
+                    'include_classes': include_classes,
+                    }
             )
             html = html.replace(template_html, include_html)
 
-    return html
+    p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            namespaceHTMLElements=False)
+    tree = p.parseFragment(html, encoding='UTF-8')
+    return tree
 
 
 def process_non_html_elements(html, pagename):
@@ -677,12 +727,13 @@ def process_html(html, pagename=None, mw_page_id=None):
     a rendered MediaWiki page and process bits and pieces of it, normalize
     elements / attributes and return cleaned up HTML.
     """
-    html = replace_mw_templates_with_includes(html, pagename)
+    #html = replace_mw_templates_with_includes(html, pagename)
     html = process_non_html_elements(html, pagename)
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
+    tree = replace_mw_templates_with_includes(tree, pagename)
     tree = fix_internal_links(tree)
     tree = fix_basic_tags(tree)
     tree = remove_edit_links(tree)
@@ -713,7 +764,7 @@ def import_pages():
     pages = pagelist.listFromQuery(site, response_list)
     print "Got master page list."
     for mw_p in pages[:250]:
-        if mw_p.title != '201 N Huron Ypsilanti, MI': continue
+        if mw_p.title != '109,901': continue
         print "Importing %s" % mw_p.title
         wikitext = mw_p.getWikiText()
         if mw_p.isRedir():
