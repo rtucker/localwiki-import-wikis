@@ -5,6 +5,7 @@ from xml.dom import minidom
 from urlparse import urljoin, urlsplit
 import urllib
 import re
+from copy import copy
 from html5lib import sanitizer
 from wikitools import *
 
@@ -582,16 +583,22 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None):
         img_tmp_f.close()
         img_ptr.close()
 
+        # For each image, find the image's supporting HTML in the tree
+        # and transform it to comply with our HTML.
+        html_before_fix = _convert_to_string(tree)
+        tree = fix_image_html(image_title, quoted_image_title, filename, tree)
+
+        if _convert_to_string(tree) == html_before_fix:
+            # Image isn't actually on the page, so let's not create or attach
+            # the PageFile.
+            return tree
+
         # Create the PageFile and associate it with the current page.
         print "..Creating image %s on page %s" % (filename, pagename)
         attach_to_pagename = attach_to_pagename or pagename
         pfile = PageFile(name=filename, slug=slugify(attach_to_pagename))
         pfile.file.save(filename, file_content, save=False)
         pfile.save()
-
-        # For each image, find the image's supporting HTML in the tree
-        # and transform it to comply with our HTML.
-        tree = fix_image_html(image_title, quoted_image_title, filename, tree)
 
     return tree
 
