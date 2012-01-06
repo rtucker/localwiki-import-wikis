@@ -600,6 +600,57 @@ def remove_script_tags(tree):
     return tree
 
 
+def replace_blockquote(tree):
+    """
+    Replace <blockquote> with <p class="indent1">
+    """
+    for elem in tree:
+        if elem.tag == 'blockquote':
+            elem.tag = 'p'
+            elem.attrib['class'] = 'indent1'
+        for item in elem.findall(".//blockquote"):
+            item.tag = 'p'
+            item.attrib['class'] = 'ident1'
+    return tree
+
+
+def fix_image_galleries(tree):
+    """
+    We remove the image gallery wrapper HTML / table and we move the
+    gallery text caption into the image caption itself.
+
+    At some point we may have our own 'gallery' mode for displaying a set
+    of images at equal size, but for now we just run them all together - it
+    should look pretty reasonable in most cases.
+    """
+    def _fix_gallery(item):
+        # Grab all of the image spans inside of the item table.
+        p = etree.Element("p")
+        for image in item.findall(".//span"):
+            if not 'image_frame' in image.attrib.get('class'):
+                continue
+            p.append(image)
+        item.tag = 'removeme'
+        if len(list(p.iterchildren())):
+            return p
+        return None
+
+    new_tree = []
+    for elem in tree:
+        if elem.tag == 'table' and elem.attrib.get('class') == 'gallery':
+            gallery = _fix_gallery(elem)
+            new_tree.append(gallery)
+        else:
+            for item in elem.findall(".//table[@class='gallery']"):
+                gallery = _fix_gallery(item)
+                pos = gallery.getparent().index()
+                gallery.getparent().insert(pos, gallery)
+                item.tag = 'removeme'
+            new_tree.append(elem)
+
+    return new_tree
+
+
 def process_html(html, pagename=None, mw_page_id=None):
     """
     This is the real workhorse.  We take an html string which represents
@@ -619,8 +670,10 @@ def process_html(html, pagename=None, mw_page_id=None):
     tree = throw_out_tags(tree)
     tree = remove_toc(tree)
     tree = remove_script_tags(tree)
+    tree = replace_blockquote(tree)
     if pagename is not None and mw_page_id:
         tree = grab_images(tree, mw_page_id, pagename)
+    tree = fix_image_galleries(tree)
     tree = fix_indents(tree)
 
     tree = remove_elements_tagged_for_removal(tree)
