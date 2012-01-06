@@ -338,7 +338,8 @@ def create_mw_template_as_page(template_name, template_html):
         mw_page = page.Page(site, title=template_name)
         p = Page(name=include_name)
         p.content = process_html(template_html, pagename=template_name,
-                                 mw_page_id=mw_page.pageid)
+                                 mw_page_id=mw_page.pageid,
+                                 attach_img_to_pagename=include_name)
         p.clean_fields()
         p.save()
 
@@ -528,7 +529,7 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree):
     return tree
 
 
-def grab_images(tree, page_id, pagename):
+def grab_images(tree, page_id, pagename, attach_to_pagename=None):
     """
     Imports the images on a page as PageFile objects and fixes the page's
     HTML to be what we want for images.
@@ -583,7 +584,8 @@ def grab_images(tree, page_id, pagename):
 
         # Create the PageFile and associate it with the current page.
         print "..Creating image %s on page %s" % (filename, pagename)
-        pfile = PageFile(name=filename, slug=slugify(pagename))
+        attach_to_pagename = attach_to_pagename or pagename
+        pfile = PageFile(name=filename, slug=slugify(attach_to_pagename))
         pfile.file.save(filename, file_content, save=False)
         pfile.save()
 
@@ -721,7 +723,7 @@ def fix_image_galleries(tree):
     return new_tree
 
 
-def process_html(html, pagename=None, mw_page_id=None):
+def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=None):
     """
     This is the real workhorse.  We take an html string which represents
     a rendered MediaWiki page and process bits and pieces of it, normalize
@@ -743,7 +745,8 @@ def process_html(html, pagename=None, mw_page_id=None):
     tree = remove_script_tags(tree)
     tree = replace_blockquote(tree)
     if pagename is not None and mw_page_id:
-        tree = grab_images(tree, mw_page_id, pagename)
+        tree = grab_images(tree, mw_page_id, pagename,
+            attach_img_to_pagename)
     tree = fix_image_galleries(tree)
     tree = fix_indents(tree)
 
