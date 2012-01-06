@@ -340,7 +340,8 @@ def create_mw_template_as_page(template_name, template_html):
         p = Page(name=include_name)
         p.content = process_html(template_html, pagename=template_name,
                                  mw_page_id=mw_page.pageid,
-                                 attach_img_to_pagename=include_name)
+                                 attach_img_to_pagename=include_name,
+                                 show_img_borders=False)
         p.clean_fields()
         p.save()
 
@@ -427,7 +428,8 @@ def process_non_html_elements(html, pagename):
     return html
 
 
-def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree):
+def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
+        border=True):
     # Images start with something like this:
     # <a href="/mediawiki-1.16.0/index.php/File:1009-Packard.jpg"
     #    class="image">
@@ -445,7 +447,10 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree):
                 #    <img src="_files/narwals.jpg"
                 #         style="width: 272px; height: 362px;">
                 # </span>
-                extra_classes = ''
+                if border:
+                    extra_classes = ' image_frame_border'
+                else:
+                    extra_classes = ''
                 img_elem = img_a.find('img')
                 width = img_elem.attrib.get('width')
                 height = img_elem.attrib.get('height')
@@ -513,7 +518,7 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree):
                 img_wrapper.tag = 'span'
 
                 img_wrapper.attrib['class'] = (
-                    'image_frame image_frame_border' + extra_classes)
+                    'image_frame' + extra_classes)
                 img = etree.Element("img")
                 img.attrib['src'] = "_files/%s" % filename
                 if width and height:
@@ -530,7 +535,8 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree):
     return tree
 
 
-def grab_images(tree, page_id, pagename, attach_to_pagename=None):
+def grab_images(tree, page_id, pagename, attach_to_pagename=None,
+        show_image_borders=True):
     """
     Imports the images on a page as PageFile objects and fixes the page's
     HTML to be what we want for images.
@@ -586,7 +592,9 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None):
         # For each image, find the image's supporting HTML in the tree
         # and transform it to comply with our HTML.
         html_before_fix = _convert_to_string(tree)
-        tree = fix_image_html(image_title, quoted_image_title, filename, tree)
+        tree = fix_image_html(image_title, quoted_image_title, filename, tree,
+            border=show_image_borders
+        )
 
         if _convert_to_string(tree) == html_before_fix:
             # Image isn't actually on the page, so let's not create or attach
@@ -762,7 +770,8 @@ def convert_some_divs_to_tables(tree):
     return tree
 
 
-def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=None):
+def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=None,
+        show_img_borders=True):
     """
     This is the real workhorse.  We take an html string which represents
     a rendered MediaWiki page and process bits and pieces of it, normalize
@@ -784,7 +793,7 @@ def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=No
     tree = replace_blockquote(tree)
     if pagename is not None and mw_page_id:
         tree = grab_images(tree, mw_page_id, pagename,
-            attach_img_to_pagename)
+            attach_img_to_pagename, show_img_borders)
     tree = fix_image_galleries(tree)
     tree = fix_indents(tree)
 
