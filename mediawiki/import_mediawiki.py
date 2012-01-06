@@ -169,7 +169,7 @@ def _convert_to_string(l):
             s += _convert_to_string(e)
         else:
             s += etree.tostring(e, encoding='UTF-8')
-    return s
+    return s.decode('utf-8')
 
 
 def _is_wiki_page_url(href):
@@ -316,8 +316,8 @@ def _get_templates_on_page(pagename):
 
 
 def _render_template(template_name):
-    template_page = page.Page(site, title=template_name)
-    wikitext = template_page.getWikiText()
+    name_part = template_name[len('Template:'):]
+    wikitext = '{{%s}}' % name_part
     html = render_wikitext(template_name, wikitext)
     return html
 
@@ -377,7 +377,7 @@ def replace_mw_templates_with_includes(tree, pagename):
     templates = _get_templates_on_page(pagename)
     for template in templates:
         template_html = _normalize_html(_render_template(template))
-        if template_html in html:
+        if template_html in html and template_html.strip():
             # It's an include-style template.
             include_pagename = create_mw_template_as_page(template,
                 template_html)
@@ -393,11 +393,11 @@ def replace_mw_templates_with_includes(tree, pagename):
                     }
             )
             html = html.replace(template_html, include_html)
+            p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+                    tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+                    namespaceHTMLElements=False)
+            tree = p.parseFragment(html, encoding='UTF-8')
 
-    p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
-            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
-            namespaceHTMLElements=False)
-    tree = p.parseFragment(html, encoding='UTF-8')
     return tree
 
 
@@ -591,7 +591,7 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None):
         if _convert_to_string(tree) == html_before_fix:
             # Image isn't actually on the page, so let's not create or attach
             # the PageFile.
-            return tree
+            continue
 
         # Create the PageFile and associate it with the current page.
         print "..Creating image %s on page %s" % (filename, pagename)
@@ -730,13 +730,44 @@ def fix_image_galleries(tree):
     return new_tree
 
 
+def convert_some_divs_to_tables(tree):
+    """
+    We don't allow generic <div>s.  So we convert some divs to table tags,
+    which we allow styling on.
+    """
+    # For now we just convert all divs to tables and let our HTML
+    # sanitization take care of the rest.  This obviously won't always
+    # give the correct results, but it's good enough most of the time.
+    def _fix(item):
+        item.tag = 'table'
+        tr = etree.Element('tr')
+        td = etree.Element('td')
+        tr.append(td)
+
+        for child in item.iterchildren():
+            td.append(child)
+        td.text = item.text
+        style = item.attrib.get('style')
+        if style:
+            td.attrib['style'] = style
+
+        item.clear()
+        item.append(td)
+
+    for elem in tree:
+        if elem.tag == 'div':
+            _fix(elem)
+        for item in elem.findall(".//div"):
+            _fix(item)
+    return tree
+
+
 def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=None):
     """
     This is the real workhorse.  We take an html string which represents
     a rendered MediaWiki page and process bits and pieces of it, normalize
     elements / attributes and return cleaned up HTML.
     """
-    #html = replace_mw_templates_with_includes(html, pagename)
     html = process_non_html_elements(html, pagename)
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
@@ -757,6 +788,8 @@ def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=No
     tree = fix_image_galleries(tree)
     tree = fix_indents(tree)
 
+    tree = convert_some_divs_to_tables(tree)
+
     tree = remove_elements_tagged_for_removal(tree)
     return _convert_to_string(tree)
 
@@ -774,7 +807,6 @@ def import_pages():
     pages = pagelist.listFromQuery(site, response_list)
     print "Got master page list."
     for mw_p in pages[:250]:
-        if mw_p.title != '109,901': continue
         print "Importing %s" % mw_p.title
         wikitext = mw_p.getWikiText()
         if mw_p.isRedir():
