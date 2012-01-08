@@ -1,0 +1,3 @@
+ * Fix bug with templates sometimes not getting turned into includes
+ * Import page history
+ * Turn categories into tags -- when we have tagging.
