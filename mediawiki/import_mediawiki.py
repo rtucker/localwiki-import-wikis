@@ -2,14 +2,12 @@ import hashlib
 import html5lib
 from lxml import etree
 from xml.dom import minidom
-from urlparse import urljoin, urlsplit
+from urlparse import urljoin, urlsplit, urlparse, parse_qs
 import urllib
 import re
-from copy import copy
-from html5lib import sanitizer
 from wikitools import *
 
-MEDIAWIKI_URL = 'http://127.0.0.1/mediawiki-1.16.0/index.php'
+MEDIAWIKI_URL = 'URL HERE'
 
 
 def guess_api_endpoint(url):
@@ -58,7 +56,7 @@ def import_users():
         # users' emails in a separate step.
         # We require users to have an email address, so we fill this in with a
         # dummy value for now.
-        name_hash = hashlib.sha1(username).hexdigest()
+        name_hash = hashlib.sha1(username.encode('utf-8')).hexdigest()
         email = "%s@FIXME.localwiki.org" % name_hash
 
         if User.objects.filter(username=username):
@@ -218,6 +216,8 @@ def fix_internal_links(tree):
             link.attrib['href'] = urllib.quote(pagename)
 
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         if elem.tag == 'a':
             _process(elem)
         for link in elem.findall('.//a'):
@@ -227,6 +227,8 @@ def fix_internal_links(tree):
 
 def fix_basic_tags(tree):
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         # Replace i, b with em, strong.
         if elem.tag == 'b':
             elem.tag = 'strong'
@@ -242,6 +244,8 @@ def fix_basic_tags(tree):
 
 def remove_edit_links(tree):
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         if (elem.tag == 'span' and
             ('editsection' in elem.attrib.get('class').split())):
             elem.tag = 'removeme'
@@ -253,6 +257,8 @@ def remove_edit_links(tree):
 def throw_out_tags(tree):
     throw_out = ['small']
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         for parent in elem.getiterator():
             for child in parent:
                 if (child.tag in throw_out):
@@ -266,6 +272,8 @@ def throw_out_tags(tree):
 
 def remove_headline_labels(tree):
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         for parent in elem.getiterator():
             for child in parent:
                 if (child.tag == 'span' and
@@ -284,6 +292,8 @@ def remove_headline_labels(tree):
 def remove_elements_tagged_for_removal(tree):
     new_tree = []
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         if elem.tag == 'removeme':
             continue
         for parent in elem.getiterator():
@@ -402,6 +412,36 @@ def replace_mw_templates_with_includes(tree, pagename):
     return tree
 
 
+def fix_googlemaps(tree, pagename):
+    """
+    If the googlemaps extension is installed, then we process googlemaps here.
+
+    If the googlemaps extension isn't installed but its markup is in the wiki
+    then the maps get processed in process_non_html_elements.
+    """
+    def _parse_mapdata(elem):
+        img = elem.find('.//img')
+        src = img.attrib.get('src')
+        center = parse_qs(urlparse(src).query)['center']
+        lat, lon = center[0].split(',')
+        d = {'pagename': pagename, 'lat': lat, 'lon': lon}
+        mapdata_objects_to_create.append(d)
+
+    for elem in tree:
+        if isinstance(elem, basestring):
+            continue
+        if elem.tag == 'div' and elem.attrib.get('id', '').startswith('map'):
+            _parse_mapdata(elem)
+            elem.tag = 'removeme'
+
+        for item in elem.findall(".//div"):
+            if elem.attrib.get('id', '').startswith('map'):
+                _parse_mapdata(elem)
+                elem.tag = 'removeme'
+
+    return tree
+
+
 def process_non_html_elements(html, pagename):
     """
     Some MediaWiki extensions (e.g. google maps) output custom tags like
@@ -410,7 +450,10 @@ def process_non_html_elements(html, pagename):
     def _repl_googlemap(match):
         global mapdata_objects_to_create
         xml = '<googlemap %s></googlemap>' % match.group('attribs')
-        dom = minidom.parseString(xml)
+        try:
+            dom = minidom.parseString(xml)
+        except:
+            return ''
         elem = dom.getElementsByTagName('googlemap')[0]
         lon = elem.getAttribute('lon')
         lat = elem.getAttribute('lat')
@@ -434,6 +477,8 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
     # <a href="/mediawiki-1.16.0/index.php/File:1009-Packard.jpg"
     #    class="image">
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         for img_a in elem.findall(".//a[@class='image']"):
             if img_a.attrib.get('href', '').endswith(quoted_mw_img_title):
                 # This is a link to the image with class image, so this is an
@@ -624,6 +669,8 @@ def fix_indents(tree):
         dl_parent.tail = dl_parent.tail or ''
         dl_parent.tail += (dd_item.tail or '')
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         in_dd = False
         depth = 0
         for item in elem.iter():
@@ -647,6 +694,8 @@ def remove_toc(tree):
     Remove the table of contents table.
     """
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         if elem.tag == 'table' and elem.attrib.get('id') == 'toc':
             elem.tag = 'removeme'
         toc = elem.find(".//table[@id='toc']")
@@ -655,16 +704,11 @@ def remove_toc(tree):
     return tree
 
 
-def remove_script_tags(tree):
+def remove_script_tags(html):
     """
     Remove script tags.
     """
-    for elem in tree:
-        if elem.tag == 'script':
-            elem.tag = 'removeme'
-        for script in elem.findall(".//script"):
-            script.tag = 'removeme'
-    return tree
+    return re.sub('<script(.|\n)*?>(.|\n)*?<\/script>', '', html)
 
 
 def replace_blockquote(tree):
@@ -672,6 +716,8 @@ def replace_blockquote(tree):
     Replace <blockquote> with <p class="indent1">
     """
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         if elem.tag == 'blockquote':
             elem.tag = 'p'
             elem.attrib['class'] = 'indent1'
@@ -724,6 +770,8 @@ def fix_image_galleries(tree):
 
     new_tree = []
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         if elem.tag == 'table' and elem.attrib.get('class') == 'gallery':
             gallery = _fix_gallery(elem)
             new_tree.append(gallery)
@@ -763,6 +811,8 @@ def convert_some_divs_to_tables(tree):
         item.append(td)
 
     for elem in tree:
+        if isinstance(elem, basestring):
+            continue
         if elem.tag == 'div':
             _fix(elem)
         for item in elem.findall(".//div"):
@@ -778,10 +828,13 @@ def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=No
     elements / attributes and return cleaned up HTML.
     """
     html = process_non_html_elements(html, pagename)
+    html = remove_script_tags(html)
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
+    print _convert_to_string(tree)
+    tree = fix_googlemaps(tree, pagename)
     tree = replace_mw_templates_with_includes(tree, pagename)
     tree = fix_internal_links(tree)
     tree = fix_basic_tags(tree)
@@ -789,7 +842,6 @@ def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=No
     tree = remove_headline_labels(tree)
     tree = throw_out_tags(tree)
     tree = remove_toc(tree)
-    tree = remove_script_tags(tree)
     tree = replace_blockquote(tree)
     if pagename is not None and mw_page_id:
         tree = grab_images(tree, mw_page_id, pagename,
@@ -836,6 +888,8 @@ def import_pages():
         p = Page(name=mw_p.title, content=html)
         p.content = process_html(p.content, pagename=p.name,
                                  mw_page_id=mw_p.pageid)
+        if not (p.content.strip()):
+            continue  # page content can't be blank
         p.clean_fields()
         p.save()
 
