@@ -26,6 +26,28 @@ To use:
 You'll then have an import of the old Sycamore site!  User accounts are moved over
 but passwords aren't.  Users will have to reset their password in order to sign in
 for now.  We could fix this.
+To use:
+
+  0. Get localwiki up and running.  THIS SCRIPT WILL **WIPE ALL DATA** in the localwiki
+     install its run against, so DO NOT run this script against a site with real content
+     in it!
+  1. Add django_extensions to your LOCAL_INSTALLED_APPS in localsettings.py.
+     And install django_extensions (pip install django-extensions in your virtualenv)
+  2. Make a directory called "scripts" inside the sapling/ project directory and move
+     this file into it.
+  3. Find the directory your "Sycamore" code directory lives inside of.  Change
+     SYCAMORE_CODE_PATH to point there.
+  4. Copy sycamore_scripts/export.py and sycamore_scripts/user_export.py into
+     your Sycamore/ directory.
+  5. From your Sycamore/ directory, run python export.py.  Do the admin dump.  You'll now
+     have an XML file in the Sycamore/ directory containing a Sycamore XML export.
+  6. From your Sycamore/ directory, run python user_export.py.  You'll now have an XML
+     file in the Sycamore/ directory containing a Sycamore XML user export.
+  7. Run localwiki-manage runscript syc_import --script-args=/path/to/the/dump.xml /path/to/the/user.dump.xml
+
+You'll then have an import of the old Sycamore site!  User accounts are moved over
+but passwords aren't.  Users will have to reset their password in order to sign in
+for now.  We could fix this.
 """
 
 import sys
@@ -33,7 +55,6 @@ import re
 import datetime
 import urllib
 from lxml import etree
-#import cElementTree as etree
 from base64 import b64decode
 
 from pages.models import Page, slugify, PageFile, clean_name
@@ -41,9 +62,11 @@ from maps.models import MapData
 from redirects.models import Redirect
 from django.contrib.gis.geos import Point, MultiPoint
 from django.core.files.base import ContentFile
-from django.db import transaction
 
-SYCAMORE_CODE_PATH = '/home/philip/sycamore'
+#################################
+# CHANGE THIS
+SYCAMORE_CODE_PATH = '/home/philip/sycamore/'
+#################################
 sys.path.append(SYCAMORE_CODE_PATH)
 
 from Sycamore import security as sycamore_security
@@ -148,7 +171,7 @@ def parse_include_args(args):
     if have_more_args:
         args = args[re_args.end('name1'):]
     else:
-        irgs = ''
+        args = ''
     re_args = re.search('"(?P<heading>.*)"', args)
     if re_args:
         heading = re_args.group('heading')
@@ -554,7 +577,7 @@ class Formatter(sycamore_HTMLFormatter):
             include_classes += ' includepage_right'
         if heading and heading.strip():
             include_classes += ' includepage_showtitle'
-        quoted_pagename = urllib.quote(page_name)
+        quoted_pagename = urllib.quote(page_name.encode('utf-8'))
         d = {
             'width_style': width_style,
             'quoted_pagename': quoted_pagename,
@@ -1130,11 +1153,11 @@ def create_page_version(version_elem, text_elem):
     except:
         # render error
         return
-    if wikitext and wikitext.strip().lower().startswith('#redirect'):
+    if wikitext and wikitext.strip().startswith('#redirect'):
         # Page is a redirect
         line = wikitext.strip()
     	from_page = name
-    	to_page = line[line.lower().find('#redirect')+10:]
+    	to_page = line[line.find('#redirect')+10:]
         html = '<p>This version of the page was a redirect.  See <a href="%s">%s</a>.</p>' % (to_page, to_page)
     if not html or not html.strip():
         return
@@ -1267,6 +1290,8 @@ def process_element(element, just_pages, exclude_pages, just_maps):
             slug = slugify(normalize_pagename(element.attrib.get('attached_to_pagename')))
             # XXX TODO generic files
             if is_image(filename):
+                if PageFile.objects.filter(name=filename, slug=slug):
+                    return
                 pfile = PageFile(name=filename, slug=slug)
                 pfile.file.save(filename, file_content, save=False)
 
@@ -1359,7 +1384,6 @@ def process_element(element, just_pages, exclude_pages, just_maps):
             print "imported historical file %s on page %s" % (filename, normalize_pagename(element.attrib.get('attached_to_pagename')))
 
 
-@transaction.commit_on_success
 def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False):
     for event, element in etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True):
         if event == 'start':
@@ -1392,7 +1416,6 @@ def users_import_from_export_file(f):
                 previous_sibling = element.getprevious()
 
 
-@transaction.commit_on_success
 def clear_out_everything():
     from django.contrib.auth.models import User
     #for p in User.objects.all():
