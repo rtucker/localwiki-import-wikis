@@ -5,6 +5,7 @@ from xml.dom import minidom
 from urlparse import urljoin, urlsplit, urlparse, parse_qs
 import urllib
 import re
+from dateutil.parser import parse as date_parse
 from wikitools import *
 
 MEDIAWIKI_URL = 'URL HERE'
@@ -18,6 +19,8 @@ def guess_script_path(url):
     mw_path = urlsplit(MEDIAWIKI_URL).path
     if mw_path.endswith('.php'):
         return mw_path
+    if not mw_path:
+        return '/'
     return urljoin(mw_path, '.')
 
 API_ENDPOINT = guess_api_endpoint(MEDIAWIKI_URL)
@@ -27,6 +30,7 @@ SCRIPT_PATH = guess_script_path(MEDIAWIKI_URL)
 redirects = []
 include_pages_to_create = []
 mapdata_objects_to_create = []
+categories = {}
 
 
 def get_robot_user():
@@ -62,9 +66,27 @@ def import_users():
         if User.objects.filter(username=username):
             continue
 
-        print "Importing user %s" % username
+        print "Importing user %s" % username.encode('utf-8')
         u = User(username=username, email=email)
         u.save()
+
+
+def fix_pagename(name):
+    if name.startswith('Talk:'):
+        return name[5:] + "/Talk"
+    if name.startswith('User:'):
+        return "Users/" + name[5:]
+    if name.startswith('User talk:'):
+        return "Users" + name[10:] + "/Talk"
+    if name.startswith('Category:'):
+        # For now, let's just throw these into the main
+        # namespace.  TODO: Convert to tags.
+        return name[9:]
+    if name.startswith('Category talk:'):
+        # For now, let's just throw these into the main
+        # namespace.  TODO: Convert to tags.
+        return name[14:] + "/Talk"
+    return name
 
 
 def add_redirect(page):
@@ -98,8 +120,8 @@ def process_redirects():
             to_page = Page.objects.get(slug=slugify(to_pagename))
         except Page.DoesNotExist:
             print "Error creating redirect: %s --> %s" % (
-                from_pagename, to_pagename)
-            print "  (page %s does not exist)" % to_pagename
+                from_pagename.encode('utf-8'), to_pagename.encode('utf-8'))
+            print "  (page %s does not exist)" % to_pagename.encode('utf-8')
             continue
 
         if slugify(from_pagename) == to_page.slug:
@@ -107,7 +129,7 @@ def process_redirects():
         if not Redirect.objects.filter(source=slugify(from_pagename)):
             r = Redirect(source=slugify(from_pagename), destination=to_page)
             r.save(user=u, comment="Automated edit. Creating redirect.")
-            print "Redirect %s --> %s created" % (from_pagename, to_pagename)
+            print "Redirect %s --> %s created" % (from_pagename.encode('utf-8'), to_pagename.encode('utf-8'))
 
 
 def process_mapdata():
@@ -120,7 +142,7 @@ def process_mapdata():
     from django.contrib.gis.geos import Point, MultiPoint
 
     for item in mapdata_objects_to_create:
-        print "Adding mapdata for", item['pagename']
+        print "Adding mapdata for", item['pagename'].encode('utf-8')
         p = Page.objects.get(slug=slugify(item['pagename']))
 
         mapdata = MapData.objects.filter(page=p)
@@ -203,17 +225,20 @@ def _get_wiki_link(link):
     if type(pagename) == unicode:
         pagename = pagename.encode('utf-8')
 
+    if pagename:
+        pagename = fix_pagename(pagename)
+
     return pagename
 
 
 def fix_internal_links(tree):
     def _process(item):
-        pagename = _get_wiki_link(link)
+        pagename = _get_wiki_link(item)
         if pagename:
             # Set href to quoted pagename and clear out other attributes
-            for k in link.attrib:
-                del link.attrib[k]
-            link.attrib['href'] = urllib.quote(pagename)
+            for k in item.attrib:
+                del item.attrib[k]
+            item.attrib['href'] = urllib.quote(pagename)
 
     for elem in tree:
         if isinstance(elem, basestring):
@@ -341,6 +366,8 @@ def create_mw_template_as_page(template_name, template_html):
     """
     from pages.models import Page, slugify
 
+    robot = get_robot_user()
+
     name_part = template_name[len('Template:'):]
     # Keeping it simple for now.  We can namespace later if people want that.
     include_name = name_part
@@ -353,7 +380,7 @@ def create_mw_template_as_page(template_name, template_html):
                                  attach_img_to_pagename=include_name,
                                  show_img_borders=False)
         p.clean_fields()
-        p.save()
+        p.save(user=robot, comment="Automated edit. Creating included page.")
 
     return include_name
 
@@ -589,6 +616,8 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
     from django.core.files.base import ContentFile
     from pages.models import slugify, PageFile
 
+    robot = get_robot_user()
+
     # Get the list of images on this page
     params = {
         'action': 'query',
@@ -626,6 +655,11 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
         image_url = image_info['url']
         image_description_url = image_info['descriptionurl']
         quoted_image_title = urlsplit(image_description_url).path.split('/')[-1]
+        attach_to_pagename = attach_to_pagename or pagename
+
+        if PageFile.objects.filter(name=filename,
+                slug=slugify(attach_to_pagename)):
+            continue  # Image already exists.
 
         # Get the full-size image binary and store it in a string.
         img_ptr = urllib.URLopener()
@@ -647,11 +681,10 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
             continue
 
         # Create the PageFile and associate it with the current page.
-        print "..Creating image %s on page %s" % (filename, pagename)
-        attach_to_pagename = attach_to_pagename or pagename
+        print "..Creating image %s on page %s" % (filename, pagename.encode('utf-8'))
         pfile = PageFile(name=filename, slug=slugify(attach_to_pagename))
         pfile.file.save(filename, file_content, save=False)
-        pfile.save()
+        pfile.save(user=robot, comment="Automated edit. Creating file.")
 
     return tree
 
@@ -833,7 +866,6 @@ def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=No
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
-    print _convert_to_string(tree)
     tree = fix_googlemaps(tree, pagename)
     tree = replace_mw_templates_with_includes(tree, pagename)
     tree = fix_internal_links(tree)
@@ -855,43 +887,126 @@ def process_html(html, pagename=None, mw_page_id=None, attach_img_to_pagename=No
     return _convert_to_string(tree)
 
 
-def import_pages():
+def create_page_revisions(p, mw_p):
+    from django.contrib.auth.models import User
     from pages.models import Page, slugify
 
     request = api.APIRequest(site, {
-        'action': 'query',
-        'list': 'allpages',
-        'aplimit': '250',
+            'action': 'query',
+            'prop': 'revisions',
+            'rvprop': 'ids|content|timestamp|user|comment',
+            'rvlimit': '50',
+            'titles': mw_p.title,
     })
-    print "Getting master page list (this may take a bit).."
-    response_list = request.query(querycontinue=False)['query']['allpages']
-    pages = pagelist.listFromQuery(site, response_list)
-    print "Got master page list."
-    for mw_p in pages[:250]:
-        print "Importing %s" % mw_p.title
-        wikitext = mw_p.getWikiText()
-        if mw_p.isRedir():
-            add_redirect(mw_p)
-            continue
+    response_pages = request.query()['query']['pages']
+    first_pageid = response_pages.keys()[0]
+    rev_num = 0
+    total_revs = len(response_pages[first_pageid]['revisions'])
+    for revision in response_pages[first_pageid]['revisions']:
+        rev_num += 1
+        if rev_num == total_revs:
+            history_type = 0  # Added
+        else:
+            history_type = 1  # Updated
+
+        history_comment = revision.get('comment', None)
+        if history_comment:
+            history_comment = history_comment[:200]
+
+        username = revision.get('user', None)
+        user = User.objects.filter(username=username)
+        if user:
+            user = user[0]
+            history_user_id = user.id
+        else:
+            history_user_id = None
+        history_user_ip = None  # MW offers no way to get this via API
+
+        timestamp = revision.get('timestamp', None)
+        history_date = date_parse(timestamp)
+
+        wikitext = revision.get('*', None)
         html = render_wikitext(mw_p.title, wikitext)
 
-        if Page.objects.filter(slug=slugify(mw_p.title)):
-            # Page already exists with this slug.  This is probably because
-            # MediaWiki has case-sensitive pagenames.
-            other_page = Page.objects.get(slug=slugify(mw_p.title))
-            if len(html) > other_page.content:
-                # *This* page has more content.  Let's use it instead.
-                for other_page_version in other_page.versions.all():
-                    other_page_version.delete()
-                other_page.delete(track_changes=False)
+        # Create a dummy Page object to get the correct cleaning behavior
+        dummy_p = Page(name=p.name, content=html)
+        dummy_p.content = process_html(dummy_p.content, pagename=p.name,
+            mw_page_id=mw_p.pageid)
+        if not (dummy_p.content.strip()):
+            continue  # Can't be blank
+        dummy_p.clean_fields()
+        html = dummy_p.content
 
-        p = Page(name=mw_p.title, content=html)
-        p.content = process_html(p.content, pagename=p.name,
-                                 mw_page_id=mw_p.pageid)
-        if not (p.content.strip()):
-            continue  # page content can't be blank
-        p.clean_fields()
-        p.save()
+        p_h = Page.versions.model(
+            id=p.id,
+            name=p.name,
+            slug=slugify(p.name),
+            content=html,
+            history_comment=history_comment,
+            history_date=history_date,
+            history_type=history_type,
+            history_user_id=history_user_id,
+            history_user_ip=history_user_ip
+        )
+        p_h.save()
+        print "Imported historical page %s" % p.name.encode('utf-8')
+
+
+def import_pages():
+    from pages.models import Page, slugify
+    global categories
+
+    for namespace in ['0', '1', '2', '3', '14', '15']:
+        request = api.APIRequest(site, {
+            'action': 'query',
+            'list': 'allpages',
+            'apnamespace': namespace,
+        })
+        print "Getting master page list (this may take a bit).."
+        response_list = request.query()['query']['allpages']
+        pages = pagelist.listFromQuery(site, response_list)
+        print "Got master page list."
+        for mw_p in pages:
+            print "Importing %s" % mw_p.title.encode('utf-8')
+            wikitext = mw_p.getWikiText()
+            if mw_p.isRedir():
+                add_redirect(mw_p)
+                continue
+            html = render_wikitext(mw_p.title, wikitext)
+
+            name = fix_pagename(mw_p.title)
+
+            if Page.objects.filter(slug=slugify(name)):
+                # Page already exists with this slug.  This is probably because
+                # MediaWiki has case-sensitive pagenames.
+                other_page = Page.objects.get(slug=slugify(name))
+                if len(html) > other_page.content:
+                    print "Clearing out other page..", other_page
+                    # *This* page has more content.  Let's use it instead.
+                    for other_page_version in other_page.versions.all():
+                        other_page_version.delete()
+                    other_page.delete(track_changes=False)
+                else:
+                    # Other page has more content.
+                    continue
+
+            p = Page(name=name, content=html)
+            p.content = process_html(p.content, pagename=p.name,
+                                     mw_page_id=mw_p.pageid)
+            if not (p.content.strip()):
+                continue  # page content can't be blank
+            p.clean_fields()
+            p.save(track_changes=False)
+
+            create_page_revisions(p, mw_p)
+
+            categories[p.slug] = mw_p.getCategories()
+
+
+def process_categories():
+    f = open('categories.out', 'w')
+    f.write(repr(categories))
+    f.close()
 
 
 def clear_out_existing_data():
@@ -927,3 +1042,4 @@ def run():
     import_pages()
     process_redirects()
     process_mapdata()
+    process_categories()
