@@ -50,10 +50,7 @@ but passwords aren't.  Users will have to reset their password in order to sign 
 for now.  We could fix this.
 """
 
-import gevent
-
-from green_django import make_django_green
-make_django_green()
+from multiprocessing import Process
 
 import os
 import sys
@@ -83,6 +80,7 @@ from base64 import b64decode
 from pages.models import Page, slugify, PageFile, clean_name
 from maps.models import MapData
 from redirects.models import Redirect
+from haystack import site as haystack_site
 from django.contrib.gis.geos import Point, MultiPoint
 from django.core.files.base import ContentFile
 from django.db import transaction
@@ -1115,7 +1113,7 @@ def create_page(page_elem, text_elem):
     p.clean_fields()
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
-    print "Imported page %s" % name
+    print "\tImported page %s" % name
 
 
 def convert_edit_type(s):
@@ -1192,7 +1190,7 @@ def create_page_version(version_elem, text_elem):
         history_user_ip=history_user_ip
     )
     p_h.save()
-    print "Imported historical page %s" % name
+    print "\tImported historical page %s" % name
 
 
 def is_image(filename):
@@ -1335,7 +1333,7 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
                 m_h.save()
 
 
-                print "imported image %s on page %s" % (filename, element.attrib.get('attached_to_pagename'))
+                print "\timported image %s on page %s" % (filename, element.attrib.get('attached_to_pagename'))
         # Old version of a file for a page.
         elif (element.tag == 'file' and
             element.attrib.get('deleted', 'False') == 'True'):
@@ -1385,34 +1383,67 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
             pfile_h.history_type = 1
             pfile_h.save()
 
-            print "imported historical file %s on page %s" % (filename, normalize_pagename(element.attrib.get('attached_to_pagename')))
+            print "\timported historical file %s on page %s" % (filename, normalize_pagename(element.attrib.get('attached_to_pagename')))
 
 
 @transaction.commit_on_success
+def import_process(items, just_pages, exclude_pages, just_maps):
+    from django.db import close_connection, connection
+    close_connection()
+    connection.connection = None
+
+    for element, parent, parent_parent in items:
+        process_element(element, parent, parent_parent, just_pages, exclude_pages, just_maps)
+
+
 def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False):
     jobs = []
+    items = []
+    num = 0
     for event, element in etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True):
-        if len(jobs) > 80:
-            gevent.joinall(jobs)
+        num += 1
+
+        if len(jobs) > 10:
+            print "========================================="
+            print "%s%% done" % ((num / 196832.0) * 100)
+            print "========================================="
+            for p in jobs:
+                p.start()
+            for p in jobs:
+                p.join()
             jobs = []
-        if event == 'start':
-            pass
-        elif event == 'end':
-            parent = element.getparent()
-            parent_parent = parent.getparent() if parent else None
-            jobs.append(gevent.spawn(
-                process_element, copy.deepcopy(element), copy.deepcopy(parent),
-                copy.deepcopy(parent_parent), just_pages, exclude_pages,
-                just_maps))
-                
-            # Remove all previous siblings to keep the in-memory tree small.
-            element.clear()
-            parent = element.getparent()
+
+        if event != 'end':
+            continue
+
+        parent = element.getparent()
+        parent_parent = parent.getparent() if parent else None
+        items.append((copy.deepcopy(element), copy.deepcopy(parent), copy.deepcopy(parent_parent)))
+
+        # A process for every 100 lines
+        if len(items) > 100:
+            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
+            p.daemon = True
+            jobs.append(p)
+            items = []
+
+        # Remove all previous siblings to keep the in-memory tree small.
+        element.clear()
+        parent = element.getparent()
+        previous_sibling = element.getprevious()
+        while previous_sibling is not None:
+            parent.remove(previous_sibling)
             previous_sibling = element.getprevious()
-            while previous_sibling is not None:
-                parent.remove(previous_sibling)
-                previous_sibling = element.getprevious()
-    gevent.joinall(jobs)
+
+
+    p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
+    p.daemon = True
+    jobs.append(p)
+
+    for p in jobs:
+        p.start()
+    for p in jobs:
+        p.join()
 
 
 def users_import_from_export_file(f):
@@ -1499,26 +1530,64 @@ def process_redirects():
           r.save(user=u, comment="Automated edit. Creating redirect.")
 
 
+def fix_historical_ids():
+    """
+    Due to the way we process in parallel, it wasn't possible to get the
+    correct id for a historical version when we pushed in the historical
+    versions. So we fix that here.
+    """
+    print "Fixing historical ids"
+    id_map = {}
+    for ph in Page.versions.all():
+        if ph.slug in id_map:
+            ph.id = id_map[ph.slug]
+            ph.save()
+            continue
+        ps = Page.objects.filter(slug=ph.slug)
+        if ps:
+            id_map[ph.slug] = ps[0].id
+            ph.id = ps[0].id
+            ph.save()
+
+    id_map = {}
+    for ph in PageFile.versions.all():
+        if (ph.name, ph.slug) in id_map:
+            ph.id = id_map[(ph.name, ph.slug)]
+            ph.save()
+            continue
+        ps = PageFile.objects.filter(name=ph.name, slug=ph.slug)
+        if ps:
+            id_map[(ph.name, ph.slug)] = ps[0].id
+            ph.id = ps[0].id
+            ph.save()
+
+
+def turn_off_search():
+    haystack_site.unregister(Page)
+
+
 def run(*args, **kwargs):
     if not args:
         print "usage: python manage.py runscript syc_import --script-args=<export_file> <user_export_file>"
         return
     filename = args[0]
     user_filename = args[1] 
+    turn_off_search()
     clear_out_everything()
-    f = open(user_filename, 'r')
-    users_import_from_export_file(f)
-    f.close()
-    f = open(filename, 'r')
-    import_from_export_file(f, exclude_pages=True)
-    f.close()
+    #f = open(user_filename, 'r')
+    #users_import_from_export_file(f)
+    #f.close()
+    #f = open(filename, 'r')
+    #import_from_export_file(f, exclude_pages=True)
+    #f.close()
     f = open(filename, 'r')
     import_from_export_file(f, just_pages=True)
     f.close()
-    f = open(filename, 'r')
-    import_from_export_file(f, just_maps=True)
-    f.close()
-    process_redirects()
+    #f = open(filename, 'r')
+    #import_from_export_file(f, just_maps=True)
+    #f.close()
+    #process_redirects()
+    #fix_historical_ids()
 
 
 if __name__ == '__main__':
