@@ -565,7 +565,7 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
                     if caption is not None:
                         magnify = caption.find(".//div[@class='magnify']")
                         tail = ''
-                        if magnify:
+                        if magnify is not None:
                             tail = magnify.tail
                             caption.remove(magnify)
                         if tail:
