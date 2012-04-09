@@ -126,6 +126,13 @@ class TestHTMLNormalization(unittest.TestCase):
 
         self.assertTrue(is_html_equal(fixed_html, expected_html))
 
+    def test_convert_div(self):
+        html = """<div>Blah</div>"""
+        expected_html = """<table><tr><td>Blah</td></tr></table>"""
+        self.assertTrue(is_html_equal(process_html(html, "Test convert div"), expected_html))
+        html = """<div class="adr">123 Main Street</div>"""
+        expected_html = """<span class="adr">123 Main Street</span>"""
+        self.assertTrue(is_html_equal(process_html(html, "Test convert special div"), expected_html))
 
 def run():
     unittest.main()

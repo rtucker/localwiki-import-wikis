@@ -8,7 +8,7 @@ import re
 from dateutil.parser import parse as date_parse
 from wikitools import *
 
-MEDIAWIKI_URL = 'URL HERE'
+MEDIAWIKI_URL = 'URL_HERE'
 
 
 def guess_api_endpoint(url):
@@ -264,6 +264,13 @@ def fix_basic_tags(tree):
             elem.tag = 'em'
         for item in elem.findall('.//i'):
             item.tag = 'em'
+
+        # Replace <big> with <strong>
+        if elem.tag == 'big':
+            elem.tag = 'strong'
+        for item in elem.findall('.//big'):
+            item.tag = 'strong'
+
     return tree
 
 
@@ -822,12 +829,17 @@ def fix_image_galleries(tree):
 def convert_some_divs_to_tables(tree):
     """
     We don't allow generic <div>s.  So we convert some divs to table tags,
-    which we allow styling on.
+    which we allow styling on, aside from some special cases like addresses.
     """
-    # For now we just convert all divs to tables and let our HTML
-    # sanitization take care of the rest.  This obviously won't always
-    # give the correct results, but it's good enough most of the time.
+    # For now we just convert divs to tables and let our HTML sanitization take
+    # care of the rest.  This obviously won't always give the correct results,
+    # but it's good enough most of the time. We convert special divs to span
+    _special_classes = ['adr']
     def _fix(item):
+        item_class = item.attrib.get('class', '')
+        if any([c in _special_classes for c in item_class.split(' ')]):
+            item.tag = 'span'
+            return
         item.tag = 'table'
         tr = etree.Element('tr')
         td = etree.Element('td')
