@@ -6,7 +6,8 @@ from urlparse import urljoin, urlsplit, urlparse, parse_qs
 import urllib
 import re
 from dateutil.parser import parse as date_parse
-from wikitools import *
+from mediawikitools import *
+from django.db import transaction
 
 MEDIAWIKI_URL = 'URL_HERE'
 
@@ -63,7 +64,7 @@ def import_users():
         name_hash = hashlib.sha1(username.encode('utf-8')).hexdigest()
         email = "%s@FIXME.localwiki.org" % name_hash
 
-        if User.objects.filter(username=username):
+        if User.objects.filter(username=username).exists():
             continue
 
         print "Importing user %s" % username.encode('utf-8')
@@ -1049,9 +1050,16 @@ def clear_out_existing_data():
 
 
 def run():
+    print "Clearing out existing data..."
     clear_out_existing_data()
-    import_users()
+    print "Importing users..."
+    with transaction.commit_on_success():
+        import_users()
+    print "Importing pages..."
     import_pages()
+    print "Processing redirects..."
     process_redirects()
+    print "Processing map data..."
     process_mapdata()
+    print "Processing categories..."
     process_categories()

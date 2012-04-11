@@ -1,2 +1,2 @@
 # You need LocalWiki and all its requirements, plus these:
-wikitools==1.1.1
+-e git+git://github.com/mivanov/python-mediawikitools.git#egg=mediawikitools
