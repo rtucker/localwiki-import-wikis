@@ -52,6 +52,7 @@ def import_users():
     request = api.APIRequest(site, {
         'action': 'query',
         'list': 'allusers',
+        'aulimit': 500,
     })
     for item in request.query()['query']['allusers']:
         username = item['name'][:30]
@@ -973,6 +974,7 @@ def import_pages():
         request = api.APIRequest(site, {
             'action': 'query',
             'list': 'allpages',
+            'aplimit': 500,
             'apnamespace': namespace,
         })
         print "Getting master page list (this may take a bit).."
