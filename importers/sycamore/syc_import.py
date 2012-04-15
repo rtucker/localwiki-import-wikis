@@ -33,6 +33,7 @@ from multiprocessing import Process
 import os
 import sys
 import site
+import gc
 
 # We have to hard-code these here, as we run a few setup commands (in
 # setup_all) that execute before the settings can be safely loaded.
@@ -609,6 +610,17 @@ class Formatter(sycamore_HTMLFormatter):
         # remove surrounding <p> tag
         return '\n'.join(address.strip().split('\n')[1:-1])
 
+    def process_footnote_macro(self, macro_obj, name, args):
+        args = args.strip()
+        if not args:
+            return
+        html = strip_outer_para(render_wikitext(args, strong=False))
+        if not hasattr(self, '_footnotes'):
+            self._footnotes = []
+        idx = len(self._footnotes) + 1
+        self._footnotes.append((html, idx))
+        return "<sup>%s</sup>" % idx
+
     def macro(self, macro_obj, name, args):
         macro_processors = {
             'image': self.process_image_macro,
@@ -618,6 +630,7 @@ class Formatter(sycamore_HTMLFormatter):
             'nbsp': self.process_nbsp_macro,
             'address': self.process_address_macro,
             'mailto': self.process_mailto_macro,
+            'footnote': self.process_footnote_macro,
         }
         if name.lower() in macro_processors:
             return macro_processors[name.lower()](macro_obj, name, args)
@@ -834,6 +847,11 @@ def _convert_to_string(l):
         else:
             s += etree.tostring(e, encoding='UTF-8')
     return s
+
+
+def strip_outer_para(quote):
+    quote = quote.strip()
+    return quote[quote.find('>')+1: len(quote)-len('</p>')].strip()
 
 
 def fix_threaded_indents(s):
@@ -1054,6 +1072,12 @@ def render_wikitext(text, strong=True, page_slug=None):
 
     wiki_html = sycamore_wikifyString(text, request, page,
         formatter=formatter, strong=strong, doCache=False)
+
+    if strong and hasattr(formatter, '_footnotes'):
+        items = ["%s. %s" % (id, note) for (note, id) in formatter._footnotes]
+        footnotes = "\n<h2>Footnotes</h2>\n<p>%s</p>" % ('<br/>'.join(items))
+        wiki_html += footnotes
+
     return wiki_html
 
 
@@ -1088,7 +1112,11 @@ def create_page(page_elem, text_elem):
     if not html or not html.strip():
         return
     p = Page(name=name, content=html)
-    p.clean_fields()
+    try:
+        p.clean_fields()
+    except:
+        print "\t ERROR importing HTML for %s" % name
+        return
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
     print "\tImported page %s" % name
@@ -1153,7 +1181,11 @@ def create_page_version(version_elem, text_elem):
 
     # Create a dummy Page object to get the correct cleaning behavior
     p = Page(name=name, content=html)
-    p.clean_fields()
+    try:
+        p.clean_fields()
+    except:
+        print "\t ERROR importing HTML for %s" % name
+        return
     html = tidy_html(p.content)
 
     p_h = Page.versions.model(
@@ -1376,21 +1408,23 @@ def import_process(items, just_pages, exclude_pages, just_maps):
 
 def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False):
     jobs = []
+    to_start = []
     items = []
-    num = 0
     for event, element in etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True):
-        num += 1
+        for p in to_start:
+            # Clean up address space before fork()
+            gc.collect()
+            p.start()
+            jobs.append(p)
+            to_start.remove(p)
 
-        if len(jobs) > 10:
-            print "========================================="
-            print "%s%% done" % ((num / 196832.0) * 100)
-            print "========================================="
+        while len(jobs) >= 10:
             for p in jobs:
-                p.start()
-            for p in jobs:
-                p.join()
-            jobs = []
-
+                p.join(0.05)
+                if not p.is_alive():
+                    jobs.remove(p)
+                    break
+        
         if event != 'end':
             continue
 
@@ -1398,11 +1432,17 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
         parent_parent = parent.getparent() if parent else None
         items.append((copy.deepcopy(element), copy.deepcopy(parent), copy.deepcopy(parent_parent)))
 
-        # A process for every 100 lines
-        if len(items) > 100:
+        if not exclude_pages:
+            process_every = 40
+        else:
+            # File imports use way more memory, so we send less elements
+            # to the process.
+            process_every = 30
+
+        if len(items) > process_every:
             p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
             p.daemon = True
-            jobs.append(p)
+            to_start.append(p)
             items = []
 
         # Remove all previous siblings to keep the in-memory tree small.
@@ -1416,10 +1456,12 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
 
     p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
     p.daemon = True
-    jobs.append(p)
+    to_start.append(p)
 
-    for p in jobs:
+    for p in to_start:
         p.start()
+        jobs.append(p)
+        to_start.remove(p)
     for p in jobs:
         p.join()
 
@@ -1439,6 +1481,7 @@ def users_import_from_export_file(f):
                 parent.remove(previous_sibling)
                 previous_sibling = element.getprevious()
 
+
 def clear_out_everything():
     from django.db import connection
     from django.contrib.auth.models import User
@@ -1452,12 +1495,16 @@ def clear_out_everything():
     cursor.execute('DELETE from maps_mapdata_hist')
     print 'All map history deleted'
 
-    print 'Bulk clearing out all page data'
-    cursor.execute('DELETE from pages_page')
-    print 'All page data deleted'
-    print 'Bulk clearing out all page history'
-    cursor.execute('DELETE from pages_page_hist')
-    print 'All page history deleted'
+    print 'Bulk clearing out all tag data'
+    cursor.execute('DELETE from tags_pagetagset')
+    cursor.execute('DELETE from tags_pagetagset_tags')
+    cursor.execute('DELETE from tags_tag')
+    print 'All tag data deleted'
+    print 'Bulk clearing out all tag history'
+    cursor.execute('DELETE from tags_pagetagset_hist')
+    cursor.execute('DELETE from tags_pagetagset_hist_tags')
+    cursor.execute('DELETE from tags_tag_hist')
+    print 'All tag history deleted'
 
     print 'Bulk clearing out all file data'
     cursor.execute('DELETE from pages_pagefile')
@@ -1472,6 +1519,13 @@ def clear_out_everything():
     print 'Bulk clearing out all redirect history'
     cursor.execute('DELETE from redirects_redirect_hist')
     print 'All redirect history deleted'
+
+    print 'Bulk clearing out all page data'
+    cursor.execute('DELETE from pages_page')
+    print 'All page data deleted'
+    print 'Bulk clearing out all page history'
+    cursor.execute('DELETE from pages_page_hist')
+    print 'All page history deleted'
 
     transaction.commit_unless_managed()
 
@@ -1552,20 +1606,20 @@ def run(*args, **kwargs):
     user_filename = args[1] 
     turn_off_search()
     clear_out_everything()
-    #f = open(user_filename, 'r')
-    #users_import_from_export_file(f)
-    #f.close()
-    #f = open(filename, 'r')
-    #import_from_export_file(f, exclude_pages=True)
-    #f.close()
+    f = open(user_filename, 'r')
+    users_import_from_export_file(f)
+    f.close()
+    f = open(filename, 'r')
+    import_from_export_file(f, exclude_pages=True)
+    f.close()
     f = open(filename, 'r')
     import_from_export_file(f, just_pages=True)
     f.close()
-    #f = open(filename, 'r')
-    #import_from_export_file(f, just_maps=True)
-    #f.close()
-    #process_redirects()
-    #fix_historical_ids()
+    f = open(filename, 'r')
+    import_from_export_file(f, just_maps=True)
+    f.close()
+    process_redirects()
+    fix_historical_ids()
 
 
 if __name__ == '__main__':
