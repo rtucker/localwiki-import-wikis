@@ -55,9 +55,9 @@ Export format looks something like:
 <group name="group name">
 <defaults may_read="True / False" may_edit="True / False"
           may_delete="True / False"    may_admin="True / False" />
-<user id="user name"/>
-<user id="user name2"/>
-<user id="IP ADDRESS" type="IP">
+<user="user name"/>
+<user="user name2"/>
+<user="ip addr" type="IP">
 ..
 </group>
 </groups>
@@ -89,8 +89,11 @@ Export format looks something like:
 # Imports
 import sys
 import os
+import gc
 import shutil
 import time
+import threading
+import Queue
 import xml.dom.minidom
 from xml.dom.minidom import getDOMImplementation
 from base64 import b64encode
@@ -130,7 +133,10 @@ def getPageList(request, objects=True):
     for result in request.cursor.fetchall():
         page_name = result[0] 
         if objects:
-            page_list.append(Page(page_name, request))
+	    try:
+               page_list.append(Page(page_name, request))
+            except:
+               pass
         else:
             page_list.append(page_name)
     return page_list
@@ -171,7 +177,7 @@ def start_wiki(request, file):
         'sitename': request.config.sitename
     }
     text = '<wiki %s>\n' % generate_attributes(d)
-    file.write(text.encode(config.charset))
+    file.write(text)
 
 def wiki_settings(request, file):
     local_config = config.reduce_to_local_config(
@@ -182,14 +188,14 @@ def wiki_settings(request, file):
 def start_pages(request, file):
     file.write('<pages>\n')
 
-def get_page_text(page, file):
+def get_page_text(page):
     doc = xml.createDocument(None, "text", None)
     root = doc.documentElement
     text = doc.createTextNode(page.get_raw_body(fresh=True))
     root.appendChild(text)
-    file.write(root.toxml().encode(config.charset) + '\n')
+    return (root.toxml().encode(config.charset) + '\n')
 
-def get_versions(page, file):
+def get_versions(page):
     """
     Write the text for all the versions of the page.
     """
@@ -201,6 +207,7 @@ def get_versions(page, file):
          order by editTime desc""",
       {'pagename':page.page_name, 'wiki_id':page.wiki_id})
 
+    l = []
     for result in page.request.cursor.fetchall():
         d = {'propercased_name': result[0],
              'edit_time': result[1],
@@ -209,29 +216,84 @@ def get_versions(page, file):
              'comment': result[4],
              'user_ip': result[5]
         }
-        file.write('<version %s>\n' % generate_attributes(d))
+        l.append('<version %s>\n' % generate_attributes(d))
         version = Page(page.page_name, page.request,
                             prev_date=d['edit_time'])
-        get_page_text(version, file)
-        file.write('</version>\n')
+        l.append(get_page_text(version))
+        l.append('</version>\n')
+    return ''.join(l)
+
+
+class Serializer(threading.Thread):
+    def __init__(self, wiki_name, queue, file, file_lock, **kwargs):
+        self.queue = queue
+        self.file = file
+        self.file_lock = file_lock
+
+        # Create a local db connection
+        self.request = request.RequestDummy(wiki_name=wiki_name)
+
+        super(Serializer, self).__init__()
+
+    def serialize(self, item):
+        pass
+
+    def run(self):
+        while True:
+            gc.collect()
+            item = self.queue.get()
+            self.serialize(item)
+            self.queue.task_done()
+
+
+class SerializePage(Serializer):
+    def serialize(self, item):
+        page = item
+        page.request = self.request
+        page.cursor = self.request.cursor
+
+        d = {'name': page.page_name,
+             'propercased_name': page.proper_name()}
+        s = '<page %s>' % generate_attributes(d)
+        s += get_page_text(page)
+        s += get_versions(page)
+        s += '</page>\n'
+
+        self.file_lock.acquire()
+        self.file.write(s)
+        self.file_lock.release()
+
+
+class SerializeFile(Serializer):
+    def serialize(self, item):
+        page = item
+        page.request = self.request
+        page.cursor = self.request.cursor
+
+        files_current_versions(page, self.file, self.file_lock)
+        files_old_versions(page, self.file, self.file_lock)
+
 
 def pages(request, file):
     """
     Export the pages that are viewable to us.
     """
     start_pages(request, file)
+    file_lock = threading.Lock()
+    queue = Queue.Queue(50)
+
+    for i in range(20):
+        t = SerializePage(request.config.wiki_name, queue, file, file_lock)
+        t.setDaemon(True)
+        t.start()
+
     for page in getPageList(request, objects=True):
         if (not command_line and
             not request.user.may.read(page)):
-           continue 
-        d = {'name': page.page_name,
-             'propercased_name': page.proper_name()}
-        file.write('<page %s>' % generate_attributes(d))
+           continue
+        queue.put(page)
 
-        get_page_text(page, file)
-        get_versions(page, file)
-
-        file.write('</page>\n')
+    queue.join()
     end_pages(request, file)
 
 def end_pages(request, file):
@@ -246,13 +308,13 @@ def start_files(request, file):
 def end_files(request, file):
     file.write('</files>\n')
 
-def start_file(d, request, file):
-    file.write('<file %s>' % generate_attributes(d))
+def start_file(d, request):
+    return ('<file %s>' % generate_attributes(d))
 
-def end_file(d, request, file):
-    file.write('</file>\n')
+def end_file(d, request):
+    return '</file>\n'
 
-def file_content(file_attrs, request, output, deleted=False):
+def file_content(file_attrs, request, deleted=False):
     d = {'filename': file_attrs['name'],
          'page_name': file_attrs['attached_to_pagename']}
     if deleted:
@@ -268,7 +330,7 @@ def file_content(file_attrs, request, output, deleted=False):
     doc = xml.createDocument(None, dummy_name, None)
     root = doc.documentElement
     text = doc.createTextNode(base64_file_str)
-    output.write(text.toxml().encode(config.charset))
+    return text.toxml().encode(config.charset)
 
 def list_current_files(page):
     page.request.cursor.execute(
@@ -281,10 +343,14 @@ def list_current_files(page):
          'attached_to_pagename': page.page_name})
     return page.request.cursor.fetchall()
 
-def files_current_versions(page, file_attrs, file):
+def files_current_versions(page, file, file_lock):
     """
     Get current file versions.
     """
+    file_attrs = {
+        'attached_to_pagename': page.page_name,
+        'wiki_id': page.request.config.wiki_id
+    }
     for result in list_current_files(page):
         file_attrs['name'] = result[0]
         file_attrs['uploaded_time'] = result[1]
@@ -297,9 +363,13 @@ def files_current_versions(page, file_attrs, file):
         if file_attrs.has_key('wiki_id'):
             del file_attrs['wiki_id'] # don't want to write it
 
-        start_file(file_attrs, page.request, file)
-        file_content(file_attrs, page.request, file)
-        end_file(file_attrs, page.request, file)
+        s = start_file(file_attrs, page.request)
+        s += file_content(file_attrs, page.request)
+        s += end_file(file_attrs, page.request)
+
+        file_lock.acquire()
+        file.write(s)
+        file_lock.release()
 
 def list_old_files(page):
     page.request.cursor.execute(
@@ -313,10 +383,14 @@ def list_old_files(page):
          'wiki_id': page.wiki_id})
     return page.request.cursor.fetchall()
 
-def files_old_versions(page, file_attrs, file):
+def files_old_versions(page, file, file_lock):
     """
     Get old file versions.
     """
+    file_attrs = {
+        'attached_to_pagename': page.page_name,
+        'wiki_id': page.request.config.wiki_id
+    }
     for result in list_old_files(page):
         file_attrs['name'] = result[0]
         file_attrs['uploaded_time'] = result[1]
@@ -333,9 +407,13 @@ def files_old_versions(page, file_attrs, file):
         if file_attrs.has_key('wiki_id'):
             del file_attrs['wiki_id'] # don't want to write it
 
-        start_file(file_attrs, page.request, file)
-        file_content(file_attrs, page.request, file, deleted=True)
-        end_file(file_attrs, page.request, file)
+        s = start_file(file_attrs, page.request)
+        s += file_content(file_attrs, page.request, deleted=True)
+        s += end_file(file_attrs, page.request)
+
+	file_lock.acquire()
+        file.write(s)
+        file_lock.release()
 
 def files(request, file):
     """
@@ -343,17 +421,21 @@ def files(request, file):
     we are allowed to view.
     """
     start_files(request, file)
+    file_lock = threading.Lock()
+    queue = Queue.Queue(50)
+
+    for i in range(20):
+        t = SerializeFile(request.config.wiki_name, queue, file, file_lock)
+        t.setDaemon(True)
+        t.start()
+
     for page in getPageList(request, objects=True):
         if (not command_line and
             not request.user.may.read(page)):
-           continue 
-        in_file = False
-        d = {'attached_to_pagename': page.page_name,
-             'wiki_id': page.wiki_id}
+           continue
+        queue.put(page)
 
-        files_current_versions(page, d, file)
-        files_old_versions(page, d, file)
-
+    queue.join()
     end_files(request, file)
 
 def start_events(request, file):
@@ -503,7 +585,7 @@ def map(request, file):
 
     end_map(request, file)
 
-def export(request, wiki_name=None):
+def export(request, wiki_name=None, just_files=False, exclude_files=False):
     """
     We do this in chunks because loading an entire wiki into memory
     is kinda a bad idea.
@@ -511,7 +593,11 @@ def export(request, wiki_name=None):
     if not wiki_name:
         # TODO: full export
         return
-    f = open('%s.%s.wiki.xml' % (wiki_name, time.time()), 'w')
+
+    if just_files:
+       f = open('%s.%s.files.wiki.xml' % (wiki_name, time.time()), 'w')
+    else:
+        f = open('%s.%s.wiki.xml' % (wiki_name, time.time()), 'w')
 
     xml_header = ('<?xml version="1.0" encoding="UTF-8"?>\n'
                   '<sycamore>\n')
@@ -519,13 +605,18 @@ def export(request, wiki_name=None):
     f.write(xml_header)
 
     start_wiki(request, f)
-    wiki_settings(request, f)
 
-    pages(request, f)
-    files(request, f)
-    events(request, f)
-    security(request, f)
-    map(request, f)
+    if not just_files:
+       wiki_settings(request, f)
+       pages(request, f)
+
+    if not exclude_files:
+       files(request, f)
+
+    if not just_files:
+       events(request, f)
+       security(request, f)
+       map(request, f)
 
     end_wiki(request, f)
     f.write(xml_footer)
@@ -533,6 +624,14 @@ def export(request, wiki_name=None):
 
 if __name__ == '__main__':
     command_line = True
+
+    just_files = False
+    exclude_files = False
+    if len(sys.argv) > 1:
+       if sys.argv[1] == '--just_files':
+         just_files = True
+       elif sys.argv[1] == '--exclude_files':
+         exclude_files = True
 
     sys.stdout.write("Enter the wiki shortname: ")
     wiki_name = raw_input().strip().lower()
@@ -547,5 +646,5 @@ if __name__ == '__main__':
         command_line = False
         request.user = user.User(req)
 
-    export(req, wiki_name=wiki_name)
+    export(req, wiki_name=wiki_name, just_files=just_files, exclude_files=exclude_files)
     req.db_disconnect()

@@ -26,46 +26,46 @@ To use:
 You'll then have an import of the old Sycamore site!  User accounts are moved over
 but passwords aren't.  Users will have to reset their password in order to sign in
 for now.  We could fix this.
-To use:
-
-  0. Get localwiki up and running.  THIS SCRIPT WILL **WIPE ALL DATA** in the localwiki
-     install its run against, so DO NOT run this script against a site with real content
-     in it!
-  1. Add django_extensions to your LOCAL_INSTALLED_APPS in localsettings.py.
-     And install django_extensions (pip install django-extensions in your virtualenv)
-  2. Make a directory called "scripts" inside the sapling/ project directory and move
-     this file into it.
-  3. Find the directory your "Sycamore" code directory lives inside of.  Change
-     SYCAMORE_CODE_PATH to point there.
-  4. Copy sycamore_scripts/export.py and sycamore_scripts/user_export.py into
-     your Sycamore/ directory.
-  5. From your Sycamore/ directory, run python export.py.  Do the admin dump.  You'll now
-     have an XML file in the Sycamore/ directory containing a Sycamore XML export.
-  6. From your Sycamore/ directory, run python user_export.py.  You'll now have an XML
-     file in the Sycamore/ directory containing a Sycamore XML user export.
-  7. Run localwiki-manage runscript syc_import --script-args=/path/to/the/dump.xml /path/to/the/user.dump.xml
-
-You'll then have an import of the old Sycamore site!  User accounts are moved over
-but passwords aren't.  Users will have to reset their password in order to sign in
-for now.  We could fix this.
 """
 
+from multiprocessing import Process
+
+import os
 import sys
+import site
+
+# We have to hard-code these here, as we run a few setup commands (in
+# setup_all) that execute before the settings can be safely loaded.
+DATA_ROOT = os.path.join(sys.prefix, 'share', 'localwiki')
+PROJECT_ROOT = os.path.join(os.path.split(os.path.abspath(__file__))[0], '..')
+
+site.addsitedir(PROJECT_ROOT)
+
+# Add virtualenv packages
+site_packages = os.path.join(DATA_ROOT, 'env', 'lib',
+                    'python%s' % sys.version[:3], 'site-packages')
+site.addsitedir(site_packages)
+
+os.environ['DJANGO_SETTINGS_MODULE'] = 'sapling.settings'
+
 import re
 import datetime
 import urllib
+import copy
 from lxml import etree
 from base64 import b64decode
 
 from pages.models import Page, slugify, PageFile, clean_name
 from maps.models import MapData
 from redirects.models import Redirect
+from haystack import site as haystack_site
 from django.contrib.gis.geos import Point, MultiPoint
 from django.core.files.base import ContentFile
+from django.db import transaction
 
 #################################
 # CHANGE THIS
-SYCAMORE_CODE_PATH = '/home/philip/sycamore/'
+SYCAMORE_CODE_PATH = '/home/philip/projects/sycamore/sycamore'
 #################################
 sys.path.append(SYCAMORE_CODE_PATH)
 
@@ -584,7 +584,7 @@ class Formatter(sycamore_HTMLFormatter):
             'include_classes': include_classes,
             'pagename': page_name,
         }
-        include_html = """<a%(width_style)s href="%(quoted_pagename)s" class="plugin includepage%(include_classes)s">Include page %(pagename)s</a>""" % d
+        include_html = """<a%(width_style)s href="%(quoted_pagename)s" class="plugin includepage%(include_classes)s">Include page %(pagename)s</a></p>""" % d
         return include_html
 
     def process_mailto_macro(self, macro_obj, name, args):
@@ -1081,7 +1081,7 @@ def create_page(page_elem, text_elem):
         # Page is a redirect
         line = wikitext.strip()
     	from_page = name
-    	to_page = line[line.lower().find('#redirect')+10:]
+    	to_page = line[line.find('#redirect')+10:]
         redirects.append((from_page, to_page))
         # skip page creation
         return
@@ -1091,7 +1091,7 @@ def create_page(page_elem, text_elem):
     p.clean_fields()
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
-    print "Imported page %s" % name
+    print "\tImported page %s" % name
 
 
 def convert_edit_type(s):
@@ -1132,19 +1132,9 @@ def create_page_version(version_elem, text_elem):
     history_type = convert_edit_type(edit_type)
     history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
     
-    cur_page = Page.objects.filter(slug=slugify(name)) 
-    if cur_page:
-        cur_page = cur_page[0]
-        id = cur_page.id
-    else:
-        # We need to make up an id, so let's just create the object
-        # first and then delete it to get a pk.
-        p = Page(name=name, content="foo")
-        p.save()
-        id = p.id
-        p.delete()
-        for p_h in p.versions.all():
-            p_h.delete()
+    # Set id to 0 because we create historical versions in
+    # parallel.  We fix this in fix_historical_ids().
+    id = 0
 
     wikitext = text_elem.text
     wikitext = reformat_wikitext(wikitext)
@@ -1156,7 +1146,6 @@ def create_page_version(version_elem, text_elem):
     if wikitext and wikitext.strip().startswith('#redirect'):
         # Page is a redirect
         line = wikitext.strip()
-    	from_page = name
     	to_page = line[line.find('#redirect')+10:]
         html = '<p>This version of the page was a redirect.  See <a href="%s">%s</a>.</p>' % (to_page, to_page)
     if not html or not html.strip():
@@ -1179,7 +1168,8 @@ def create_page_version(version_elem, text_elem):
         history_user_ip=history_user_ip
     )
     p_h.save()
-    print "Imported historical page %s" % name
+    print "\tImported historical page %s" % name
+
 
 def is_image(filename):
     import mimetypes
@@ -1209,9 +1199,8 @@ def process_user_element(element):
         print 'created user: %s %s' % (username, email)
 
 
-def process_element(element, just_pages, exclude_pages, just_maps):
+def process_element(element, parent, parent_parent, just_pages, exclude_pages, just_maps):
     from django.contrib.auth.models import User
-    parent = element.getparent()
     if parent is None:
         return
 
@@ -1219,7 +1208,7 @@ def process_element(element, just_pages, exclude_pages, just_maps):
         if parent.tag == 'page':
             if element.tag == 'text':
                 create_page(parent, element)
-        elif parent.tag == 'version' and element.tag == 'text' and parent.getparent().tag == 'page':
+        elif parent.tag == 'version' and element.tag == 'text' and parent_parent.tag == 'page':
             create_page_version(parent, element)
     if just_pages:
         return
@@ -1293,9 +1282,10 @@ def process_element(element, just_pages, exclude_pages, just_maps):
                 if PageFile.objects.filter(name=filename, slug=slug):
                     return
                 pfile = PageFile(name=filename, slug=slug)
-                pfile.file.save(filename, file_content, save=False)
 
+                pfile.file.save(filename, file_content, save=False)
                 pfile.save()
+
                 # Save historical version - with editor info, etc
                 m_h = pfile.versions.most_recent()
 
@@ -1321,7 +1311,7 @@ def process_element(element, just_pages, exclude_pages, just_maps):
                 m_h.save()
 
 
-                print "imported image %s on page %s" % (filename, element.attrib.get('attached_to_pagename'))
+                print "\timported image %s on page %s" % (filename, element.attrib.get('attached_to_pagename'))
         # Old version of a file for a page.
         elif (element.tag == 'file' and
             element.attrib.get('deleted', 'False') == 'True'):
@@ -1349,19 +1339,9 @@ def process_element(element, just_pages, exclude_pages, just_maps):
                 history_type = 0
             history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
             
-            cur_pfile = PageFile.objects.filter(name=filename, slug=slug)
-            if cur_pfile:
-                cur_pfile = cur_pfile[0]
-                id = cur_pfile.id
-            else:
-                # We need to make up an id, so let's just create the object
-                # first and then delete it to get a pk.
-                pfile= PageFile(name=filename, slug=slug)
-                pfile.save()
-                id = pfile.id
-                pfile.delete()
-                for pfile_h in pfile.versions.all():
-                    pfile_h.delete()
+            # Set id to 0 because we create historical versions in
+            # parallel.  We fix this in fix_historical_ids().
+            id = 0
 
             pfile_h = PageFile.versions.model(
                 id=id,
@@ -1381,23 +1361,67 @@ def process_element(element, just_pages, exclude_pages, just_maps):
             pfile_h.history_type = 1
             pfile_h.save()
 
-            print "imported historical file %s on page %s" % (filename, normalize_pagename(element.attrib.get('attached_to_pagename')))
+            print "\timported historical file %s on page %s" % (filename, normalize_pagename(element.attrib.get('attached_to_pagename')))
+
+
+@transaction.commit_on_success
+def import_process(items, just_pages, exclude_pages, just_maps):
+    from django.db import close_connection, connection
+    close_connection()
+    connection.connection = None
+
+    for element, parent, parent_parent in items:
+        process_element(element, parent, parent_parent, just_pages, exclude_pages, just_maps)
 
 
 def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False):
+    jobs = []
+    items = []
+    num = 0
     for event, element in etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True):
-        if event == 'start':
-            pass
-        elif event == 'end':
-            process_element(element, just_pages, exclude_pages, just_maps)
-            element.clear()
+        num += 1
 
-            # Remove all previous siblings to keep the in-memory tree small.
-            parent = element.getparent()
+        if len(jobs) > 10:
+            print "========================================="
+            print "%s%% done" % ((num / 196832.0) * 100)
+            print "========================================="
+            for p in jobs:
+                p.start()
+            for p in jobs:
+                p.join()
+            jobs = []
+
+        if event != 'end':
+            continue
+
+        parent = element.getparent()
+        parent_parent = parent.getparent() if parent else None
+        items.append((copy.deepcopy(element), copy.deepcopy(parent), copy.deepcopy(parent_parent)))
+
+        # A process for every 100 lines
+        if len(items) > 100:
+            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
+            p.daemon = True
+            jobs.append(p)
+            items = []
+
+        # Remove all previous siblings to keep the in-memory tree small.
+        element.clear()
+        parent = element.getparent()
+        previous_sibling = element.getprevious()
+        while previous_sibling is not None:
+            parent.remove(previous_sibling)
             previous_sibling = element.getprevious()
-            while previous_sibling is not None:
-                parent.remove(previous_sibling)
-                previous_sibling = element.getprevious()
+
+
+    p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
+    p.daemon = True
+    jobs.append(p)
+
+    for p in jobs:
+        p.start()
+    for p in jobs:
+        p.join()
 
 
 def users_import_from_export_file(f):
@@ -1415,31 +1439,41 @@ def users_import_from_export_file(f):
                 parent.remove(previous_sibling)
                 previous_sibling = element.getprevious()
 
-
 def clear_out_everything():
+    from django.db import connection
     from django.contrib.auth.models import User
     #for p in User.objects.all():
     #    p.delete()
-    for p in MapData.objects.all():
-        print 'clearing out', p
-        p.delete(track_changes=False)
-        for p_h in p.versions.all():
-            p_h.delete()
-    for p in Page.objects.all():
-        print 'clearing out', p
-        p.delete(track_changes=False)
-        for p_h in p.versions.all():
-            p_h.delete()
-    for p in PageFile.objects.all():
-        print 'clearing out', p
-        p.delete(track_changes=False)
-        for p_h in p.versions.all():
-            p_h.delete()
-    for p in Redirect.objects.all():
-        print 'clearing out', p
-        p.delete(track_changes=False)
-        for p_h in p.versions.all():
-            p_h.delete()
+    cursor = connection.cursor()
+    print 'Bulk clearing out all map data'
+    cursor.execute('DELETE from maps_mapdata')
+    print 'All map data deleted'
+    print 'Bulk clearing out all map history'
+    cursor.execute('DELETE from maps_mapdata_hist')
+    print 'All map history deleted'
+
+    print 'Bulk clearing out all page data'
+    cursor.execute('DELETE from pages_page')
+    print 'All page data deleted'
+    print 'Bulk clearing out all page history'
+    cursor.execute('DELETE from pages_page_hist')
+    print 'All page history deleted'
+
+    print 'Bulk clearing out all file data'
+    cursor.execute('DELETE from pages_pagefile')
+    print 'All file data deleted'
+    print 'Bulk clearing out all file history'
+    cursor.execute('DELETE from pages_pagefile_hist')
+    print 'All file history deleted'
+
+    print 'Bulk clearing out all redirect data'
+    cursor.execute('DELETE from redirects_redirect')
+    print 'All redirect data deleted'
+    print 'Bulk clearing out all redirect history'
+    cursor.execute('DELETE from redirects_redirect_hist')
+    print 'All redirect history deleted'
+
+    transaction.commit_unless_managed()
 
 
 def process_redirects():
@@ -1474,23 +1508,65 @@ def process_redirects():
           r.save(user=u, comment="Automated edit. Creating redirect.")
 
 
+def fix_historical_ids():
+    """
+    Due to the way we process in parallel, it wasn't possible to get the
+    correct id for a historical version when we pushed in the historical
+    versions. So we fix that here.
+    """
+    print "Fixing historical ids"
+    id_map = {}
+    for ph in Page.versions.all():
+        if ph.slug in id_map:
+            ph.id = id_map[ph.slug]
+            ph.save()
+            continue
+        ps = Page.objects.filter(slug=ph.slug)
+        if ps:
+            id_map[ph.slug] = ps[0].id
+            ph.id = ps[0].id
+            ph.save()
+
+    id_map = {}
+    for ph in PageFile.versions.all():
+        if (ph.name, ph.slug) in id_map:
+            ph.id = id_map[(ph.name, ph.slug)]
+            ph.save()
+            continue
+        ps = PageFile.objects.filter(name=ph.name, slug=ph.slug)
+        if ps:
+            id_map[(ph.name, ph.slug)] = ps[0].id
+            ph.id = ps[0].id
+            ph.save()
+
+
+def turn_off_search():
+    haystack_site.unregister(Page)
+
+
 def run(*args, **kwargs):
     if not args:
         print "usage: python manage.py runscript syc_import --script-args=<export_file> <user_export_file>"
         return
     filename = args[0]
     user_filename = args[1] 
+    turn_off_search()
     clear_out_everything()
-    f = open(user_filename, 'r')
-    users_import_from_export_file(f)
-    f.close()
-    f = open(filename, 'r')
-    import_from_export_file(f, exclude_pages=True)
-    f.close()
+    #f = open(user_filename, 'r')
+    #users_import_from_export_file(f)
+    #f.close()
+    #f = open(filename, 'r')
+    #import_from_export_file(f, exclude_pages=True)
+    #f.close()
     f = open(filename, 'r')
     import_from_export_file(f, just_pages=True)
     f.close()
-    f = open(filename, 'r')
-    import_from_export_file(f, just_maps=True)
-    f.close()
-    process_redirects()
+    #f = open(filename, 'r')
+    #import_from_export_file(f, just_maps=True)
+    #f.close()
+    #process_redirects()
+    #fix_historical_ids()
+
+
+if __name__ == '__main__':
+    run(*sys.argv[1:])
