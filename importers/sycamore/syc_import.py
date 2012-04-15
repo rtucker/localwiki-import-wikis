@@ -26,28 +26,6 @@ To use:
 You'll then have an import of the old Sycamore site!  User accounts are moved over
 but passwords aren't.  Users will have to reset their password in order to sign in
 for now.  We could fix this.
-To use:
-
-  0. Get localwiki up and running.  THIS SCRIPT WILL **WIPE ALL DATA** in the localwiki
-     install its run against, so DO NOT run this script against a site with real content
-     in it!
-  1. Add django_extensions to your LOCAL_INSTALLED_APPS in localsettings.py.
-     And install django_extensions (pip install django-extensions in your virtualenv)
-  2. Make a directory called "scripts" inside the sapling/ project directory and move
-     this file into it.
-  3. Find the directory your "Sycamore" code directory lives inside of.  Change
-     SYCAMORE_CODE_PATH to point there.
-  4. Copy sycamore_scripts/export.py and sycamore_scripts/user_export.py into
-     your Sycamore/ directory.
-  5. From your Sycamore/ directory, run python export.py.  Do the admin dump.  You'll now
-     have an XML file in the Sycamore/ directory containing a Sycamore XML export.
-  6. From your Sycamore/ directory, run python user_export.py.  You'll now have an XML
-     file in the Sycamore/ directory containing a Sycamore XML user export.
-  7. Run localwiki-manage runscript syc_import --script-args=/path/to/the/dump.xml /path/to/the/user.dump.xml
-
-You'll then have an import of the old Sycamore site!  User accounts are moved over
-but passwords aren't.  Users will have to reset their password in order to sign in
-for now.  We could fix this.
 """
 
 from multiprocessing import Process
