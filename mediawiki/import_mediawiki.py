@@ -244,7 +244,7 @@ def fix_internal_links(tree):
             item.attrib['href'] = urllib.quote(pagename)
 
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         if elem.tag == 'a':
             _process(elem)
@@ -255,7 +255,7 @@ def fix_internal_links(tree):
 
 def fix_basic_tags(tree):
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         # Replace i, b with em, strong.
         if elem.tag == 'b':
@@ -279,7 +279,7 @@ def fix_basic_tags(tree):
 
 def remove_edit_links(tree):
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         if (elem.tag == 'span' and
             ('editsection' in elem.attrib.get('class').split())):
@@ -292,7 +292,7 @@ def remove_edit_links(tree):
 def throw_out_tags(tree):
     throw_out = ['small']
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         for parent in elem.getiterator():
             for child in parent:
@@ -300,14 +300,14 @@ def throw_out_tags(tree):
                     parent.text = parent.text or ''
                     parent.tail = parent.tail or ''
                     if child.text:
-                        parent.text += (child.text + child.tail)
+                        parent.text += (child.text + (child.tail or ''))
                     child.tag = 'removeme'
     return tree
 
 
 def remove_headline_labels(tree):
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         for parent in elem.getiterator():
             for child in parent:
@@ -327,7 +327,7 @@ def remove_headline_labels(tree):
 def remove_elements_tagged_for_removal(tree):
     new_tree = []
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         if elem.tag == 'removeme':
             continue
@@ -441,11 +441,11 @@ def replace_mw_templates_with_includes(tree, pagename):
                     }
             )
             html = html.replace(template_html, include_html)
-            p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
-                    tree=html5lib.treebuilders.getTreeBuilder("lxml"),
-                    namespaceHTMLElements=False)
-            tree = p.parseFragment(html, encoding='UTF-8')
 
+    p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            namespaceHTMLElements=False)
+    tree = p.parseFragment(html, encoding='UTF-8')
     return tree
 
 
@@ -465,7 +465,7 @@ def fix_googlemaps(tree, pagename):
         mapdata_objects_to_create.append(d)
 
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         if elem.tag == 'div' and elem.attrib.get('id', '').startswith('map'):
             _parse_mapdata(elem)
@@ -542,7 +542,7 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
                     img_wrapper = img_a.getparent().getparent()
                 else:
                     # Is this a floated, non-thumbnailed image
-                    if (img_a.getparent() and
+                    if (img_a.getparent() is not None and
                         'float' in img_a.getparent().attrib.get('class', '')):
                         img_wrapper = img_a.getparent()
                     else:
@@ -712,11 +712,13 @@ def fix_indents(tree):
         dl_parent.tail = dl_parent.tail or ''
         dl_parent.tail += (dd_item.tail or '')
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         in_dd = False
         depth = 0
         for item in elem.iter():
+            if item is None:
+                continue
             if item.tag == 'dl' and not in_dd:
                 dl_parent = item
             if item.tag == 'dd':
@@ -737,12 +739,12 @@ def remove_toc(tree):
     Remove the table of contents table.
     """
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         if elem.tag == 'table' and elem.attrib.get('id') == 'toc':
             elem.tag = 'removeme'
         toc = elem.find(".//table[@id='toc']")
-        if toc:
+        if toc is not None:
             toc.tag = 'removeme'
     return tree
 
@@ -759,7 +761,7 @@ def replace_blockquote(tree):
     Replace <blockquote> with <p class="indent1">
     """
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         if elem.tag == 'blockquote':
             elem.tag = 'p'
@@ -789,7 +791,7 @@ def fix_image_galleries(tree):
                 ).getparent().find(".//div[@class='gallerytext']")
             # We have a gallery caption, so let's add it to our image
             # span.
-            if caption:
+            if caption is not None:
                 img_style = image.find('img').attrib['style']
                 for css_prop in img_style.split(';'):
                     if css_prop.startswith('width:'):
@@ -798,7 +800,9 @@ def fix_image_galleries(tree):
                 our_caption.attrib['class'] = 'image_caption'
                 our_caption.attrib['style'] = '%s;' % width
                 # Caption has an inner p, and we don't want that.
-                caption = caption.find('p')
+                caption_p = caption.find('p')
+                if caption_p is not None:
+                    caption = caption_p
                 for child in caption.iterchildren():
                     our_caption.append(child)
                 text = caption.text or ''
@@ -813,7 +817,7 @@ def fix_image_galleries(tree):
 
     new_tree = []
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         if elem.tag == 'table' and elem.attrib.get('class') == 'gallery':
             gallery = _fix_gallery(elem)
@@ -859,7 +863,7 @@ def convert_some_divs_to_tables(tree):
         item.append(td)
 
     for elem in tree:
-        if isinstance(elem, basestring):
+        if elem is None or isinstance(elem, basestring):
             continue
         if elem.tag == 'div':
             _fix(elem)
