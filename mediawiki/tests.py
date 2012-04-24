@@ -6,12 +6,13 @@ from lxml import etree
 import html5lib
 from html5lib import sanitizer
 
-from import_mediawiki import process_html, fix_image_html, SCRIPT_PATH
-
 import sapling
 site.addsitedir(os.path.abspath(os.path.split(sapling.__file__)[0]))
-from django.conf import settings
 os.environ["DJANGO_SETTINGS_MODULE"] = "sapling.settings"
+
+from import_mediawiki import process_html, fix_image_html, SCRIPT_PATH
+from django.conf import settings
+import sapling
 
 
 def _convert_to_string(l):
@@ -123,7 +124,20 @@ class TestHTMLNormalization(unittest.TestCase):
         tree = p.parseFragment(html, encoding='UTF-8')
         fixed_tree = fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
         fixed_html = _convert_to_string(fixed_tree)
+        self.assertTrue(is_html_equal(fixed_html, expected_html))
 
+        mw_img_title = 'File:Archy lee ad.jpg'
+        quoted_mw_img_title = 'File:Archy_lee_ad.jpg'
+        filename = 'Archy lee ad.jpg'
+        html = """<p><a href="/index.php?title=File:Archy_lee_ad.jpg" class="image" title="Image:Archy lee ad.jpg"><img src="/images/f/fa/Archy_lee_ad.jpg" alt="Image:Archy lee ad.jpg" height="481" border="0" width="567"/></a>
+</p>"""
+        expected_html = """<p><span class="image_frame image_frame_border"><img src="_files/Archy lee ad.jpg" style="width: 567px; height: 481px"></span>"""
+        p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            namespaceHTMLElements=False)
+        tree = p.parseFragment(html, encoding='UTF-8')
+        fixed_tree = fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
+        fixed_html = _convert_to_string(fixed_tree)
         self.assertTrue(is_html_equal(fixed_html, expected_html))
 
     def test_convert_div(self):
