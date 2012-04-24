@@ -1,3 +1,4 @@
+import time
 import hashlib
 import html5lib
 from lxml import etree
@@ -1054,6 +1055,7 @@ def clear_out_existing_data():
 def run():
     print "Clearing out existing data..."
     clear_out_existing_data()
+    start = time.time()
     print "Importing users..."
     with transaction.commit_on_success():
         import_users()
@@ -1063,5 +1065,4 @@ def run():
     process_redirects()
     print "Processing map data..."
     process_mapdata()
-    print "Processing categories..."
-    process_categories()
+    print "Import took %f seconds" % (time.time() - start)
