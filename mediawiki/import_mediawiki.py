@@ -1,3 +1,4 @@
+import sys
 import time
 import hashlib
 import html5lib
@@ -12,25 +13,22 @@ from django.db import transaction
 from sapling.pages.plugins import unquote_url
 from django.db.utils import IntegrityError
 
-MEDIAWIKI_URL = 'URL_HERE'
-
 
 def guess_api_endpoint(url):
     return urljoin(url, 'api.php')
 
 
 def guess_script_path(url):
-    mw_path = urlsplit(MEDIAWIKI_URL).path
+    mw_path = urlsplit(url).path
     if mw_path.endswith('.php'):
         return mw_path
     if not mw_path:
         return '/'
     return urljoin(mw_path, '.')
 
-API_ENDPOINT = guess_api_endpoint(MEDIAWIKI_URL)
 
 site = None
-SCRIPT_PATH = guess_script_path(MEDIAWIKI_URL)
+SCRIPT_PATH = None
 include_pages_to_create = []
 mapdata_objects_to_create = []
 
@@ -1186,6 +1184,7 @@ def clear_out_existing_data():
     """
     from pages.models import Page, PageFile
     from redirects.models import Redirect
+    from tags.models import Tag, PageTagSet
 
     for p in Page.objects.all():
         print 'Clearing out', p
@@ -1205,12 +1204,39 @@ def clear_out_existing_data():
         for r_h in r.versions.all():
             r_h.delete()
 
+    for p in PageTagSet.objects.all():
+        print 'Clearing out', p
+        p.delete(track_changes=False)
+        for p_h in p.versions.all():
+            p_h.delete()
+
+    for t in Tag.objects.all():
+        print 'Clearing out', t
+        t.delete(track_changes=False)
+        for t_h in t.versions.all():
+            t_h.delete()
+
 
 def run():
-    global site
-    site = wiki.Wiki(API_ENDPOINT)
+    global site, SCRIPT_PATH
+
+    url = raw_input("Enter the address of a MediaWiki site (ex: http://arborwiki.org/): ")
+    site = wiki.Wiki(guess_api_endpoint(url))
+    SCRIPT_PATH = guess_script_path(url)
+    sitename = site.siteinfo.get('sitename', None)
+    if not sitename:
+        print "Unable to connect to API. Please check the address."
+        sys.exit(1)
+    print "Ready to import %s" % sitename
+
+    yes_no = raw_input("This import will clear out any existing data in this "
+                       "LocalWiki instance. Continue import? (yes/no) ")
+    if yes_no.lower() != "yes":
+        sys.exit()
+
     print "Clearing out existing data..."
-    clear_out_existing_data()
+    with transaction.commit_on_success():
+        clear_out_existing_data()
     start = time.time()
     print "Importing users..."
     with transaction.commit_on_success():
@@ -1221,4 +1247,4 @@ def run():
     import_redirects()
     print "Processing map data..."
     process_mapdata()
-    print "Import took %f seconds" % (time.time() - start)
+    print "Import completed in %f minutes" % ((time.time() - start) / 60.0)
