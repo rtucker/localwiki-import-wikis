@@ -1172,7 +1172,7 @@ def process_page_categories(page, categories):
     keys = []
     for c in categories:
         # MW uses underscores for spaces in categories
-        c = c.replace("_", " ")
+        c = str(c).replace("_", " ")
         try:
             tag, created = Tag.objects.get_or_create(slug=slugify(c),
                                                  defaults={'name': c})
