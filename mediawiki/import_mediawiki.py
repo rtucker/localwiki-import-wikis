@@ -1,6 +1,7 @@
 import os
 import site
 import sapling
+import sapling.manage  # this will add virtualenv paths
 site.addsitedir(os.path.abspath(os.path.split(sapling.__file__)[0]))
 os.environ["DJANGO_SETTINGS_MODULE"] = "sapling.settings"
 
@@ -1253,7 +1254,7 @@ def run():
     import_redirects()
     print "Processing map data..."
     process_mapdata()
-    print "Import completed in %f minutes" % ((time.time() - start) / 60.0)
+    print "Import completed in %.2f minutes" % ((time.time() - start) / 60.0)
 
 if __name__ == '__main__':
     try:
