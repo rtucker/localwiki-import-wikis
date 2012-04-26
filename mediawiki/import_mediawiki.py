@@ -10,6 +10,9 @@ import time
 import hashlib
 import html5lib
 from lxml import etree
+
+_treebuilder = html5lib.treebuilders.getTreeBuilder("lxml")
+
 from xml.dom import minidom
 from urlparse import urljoin, urlsplit, urlparse, parse_qs
 import urllib
@@ -525,7 +528,7 @@ def replace_mw_templates_with_includes(tree, templates):
 
     def _normalize_html(s):
         p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
-            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            tree=_treebuilder,
             namespaceHTMLElements=False)
         tree = p.parseFragment(s, encoding='UTF-8')
         return _convert_to_string(tree)
@@ -554,7 +557,7 @@ def replace_mw_templates_with_includes(tree, templates):
             html = html.replace(template_html, include_html)
 
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
-            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            tree=_treebuilder,
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
     return tree
@@ -1007,7 +1010,7 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     html = process_non_html_elements(html, pagename)
     html = remove_script_tags(html)
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
-            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            tree=_treebuilder,
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
     tree = fix_googlemaps(tree, pagename)
