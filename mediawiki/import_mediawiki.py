@@ -1156,6 +1156,18 @@ def import_page(mw_p):
             # Other page has more content.
             return
 
+    if mw_p.title.startswith('Category:'):
+        # include list of tagged pages
+        include_html = (
+                '<a href="tags/%(quoted_tag)s" '
+                 'class="plugin includetag includepage_showtitle">'
+                 'List of pages tagged &quot;%(tag)s&quot;'
+                '</a>' % {
+                    'quoted_tag': urllib.quote(name),
+                    'tag': name,
+                    }
+            )
+        html += include_html
     p = Page(name=name, content=html)
     p.content = process_html(p.content, pagename=p.name,
                              templates=parsed['templates'],
