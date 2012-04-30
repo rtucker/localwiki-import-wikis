@@ -293,6 +293,8 @@ def parse_wikitext(wikitext, title):
 def _convert_to_string(l):
     s = ''
     for e in l:
+        if e is None:
+            continue
         if isinstance(e, basestring):
             s += e
         elif isinstance(e, list):
@@ -563,7 +565,7 @@ def replace_mw_templates_with_includes(tree, templates):
     return tree
 
 
-def fix_googlemaps(tree, pagename):
+def fix_googlemaps(tree, pagename, save_data=True):
     """
     If the googlemaps extension is installed, then we process googlemaps here.
 
@@ -571,6 +573,8 @@ def fix_googlemaps(tree, pagename):
     then the maps get processed in process_non_html_elements.
     """
     def _parse_mapdata(elem):
+        if not save_data:
+            return
         img = elem.find('.//img')
         src = img.attrib.get('src')
         center = parse_qs(urlparse(src).query)['center']
@@ -584,7 +588,7 @@ def fix_googlemaps(tree, pagename):
         if elem.tag == 'div' and elem.attrib.get('id', '').startswith('map'):
             _parse_mapdata(elem)
             elem.tag = 'removeme'
-
+            continue
         for item in elem.findall(".//div"):
             if elem.attrib.get('id', '').startswith('map'):
                 _parse_mapdata(elem)
@@ -1001,7 +1005,7 @@ def convert_some_divs_to_tables(tree):
 
 
 def process_html(html, pagename=None, mw_page_id=None, templates=[],
-        attach_img_to_pagename=None, show_img_borders=True):
+        attach_img_to_pagename=None, show_img_borders=True, historic=False):
     """
     This is the real workhorse.  We take an html string which represents
     a rendered MediaWiki page and process bits and pieces of it, normalize
@@ -1013,7 +1017,8 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
             tree=_treebuilder,
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
-    tree = fix_googlemaps(tree, pagename)
+    tree = fix_googlemaps(tree, pagename, save_data=(not historic))
+    tree = remove_elements_tagged_for_removal(tree)
     tree = replace_mw_templates_with_includes(tree, templates)
     if pagename is not None and mw_page_id:
         tree = grab_images(tree, mw_page_id, pagename,
@@ -1031,6 +1036,7 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     tree = convert_some_divs_to_tables(tree)
 
     tree = remove_elements_tagged_for_removal(tree)
+
     return _convert_to_string(tree)
 
 
@@ -1082,9 +1088,10 @@ def create_page_revisions(p, mw_p, parsed_page):
         # Create a dummy Page object to get the correct cleaning behavior
         dummy_p = Page(name=p.name, content=html)
         dummy_p.content = process_html(dummy_p.content, pagename=p.name,
-            templates=parsed['templates'], mw_page_id=mw_p.pageid)
+            templates=parsed['templates'], mw_page_id=mw_p.pageid,
+            historic=True)
         if not (dummy_p.content.strip()):
-            continue  # Can't be blank
+            dummy_p.content = '<p></p>'  # Can't be blank
         dummy_p.clean_fields()
         html = dummy_p.content
 
@@ -1152,7 +1159,7 @@ def import_page(mw_p):
     p = Page(name=name, content=html)
     p.content = process_html(p.content, pagename=p.name,
                              templates=parsed['templates'],
-                             mw_page_id=mw_p.pageid)
+                             mw_page_id=mw_p.pageid, historic=False)
 
     if not (p.content.strip()):
         return  # page content can't be blank
@@ -1171,7 +1178,6 @@ def import_pages():
 
 def process_page_categories(page, categories):
     from tags.models import Tag, PageTagSet, slugify
-
     keys = []
     for c in categories:
         # MW uses underscores for spaces in categories
