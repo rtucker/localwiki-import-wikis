@@ -305,7 +305,7 @@ def _convert_to_string(l):
 
 
 def _is_wiki_page_url(href):
-    if href.startswith(SCRIPT_PATH):
+    if SCRIPT_PATH and href.startswith(SCRIPT_PATH):
         return True
     else:
         split_url = urlsplit(href)
@@ -529,7 +529,7 @@ def replace_mw_templates_with_includes(tree, templates):
     # then we know we can replace it with an include.
 
     def _normalize_html(s):
-        p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+        p = html5lib.HTMLParser(tokenizer=html5lib.tokenizer.HTMLTokenizer,
             tree=_treebuilder,
             namespaceHTMLElements=False)
         tree = p.parseFragment(s, encoding='UTF-8')
@@ -558,7 +558,7 @@ def replace_mw_templates_with_includes(tree, templates):
             )
             html = html.replace(template_html, include_html)
 
-    p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+    p = html5lib.HTMLParser(tokenizer=html5lib.tokenizer.HTMLTokenizer,
             tree=_treebuilder,
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
@@ -590,11 +590,57 @@ def fix_googlemaps(tree, pagename, save_data=True):
             elem.tag = 'removeme'
             continue
         for item in elem.findall(".//div"):
-            if elem.attrib.get('id', '').startswith('map'):
-                _parse_mapdata(elem)
-                elem.tag = 'removeme'
+            if item.attrib.get('id', '').startswith('map'):
+                _parse_mapdata(item)
+                item.tag = 'removeme'
 
     return tree
+
+
+def fix_embeds(tree):
+    """
+    Replace <object>-style embeds with <iframe> for stuff we know how to work
+    with.
+    """
+    def _parse_flow_player(str):
+        query = parse_qs(urlparse(str).query)
+        config = query.get('config', None)
+        if not config:
+            return ''
+        config = config[0]
+        if 'url:' not in config:
+            return ''
+        video_id = config.split("url:'")[1].split('/')[0]
+        return 'http://www.archive.org/embed/%s' % video_id
+
+    def _fix_embed(elem):
+        iframe = etree.Element('iframe')
+        if 'width' in elem.attrib:
+            iframe.attrib['width'] = elem.attrib['width']
+        if 'height' in elem.attrib:
+            iframe.attrib['height'] = elem.attrib['height']
+        movie = elem.find('.//param[@name="movie"]')
+        if movie is None:
+            return
+        moviestr = movie.attrib['value']
+        if moviestr.startswith('http://www.archive.org/flow/'):
+            iframe.attrib['src'] = _parse_flow_player(moviestr)
+
+        elem.clear()
+        elem.tag = 'span'
+        elem.attrib['class'] = "plugin embed"
+        elem.text = _convert_to_string([iframe])
+
+    for elem in tree:
+        if elem is None or isinstance(elem, basestring):
+            continue
+        if elem.tag == 'object':
+            _fix_embed(elem)
+            continue
+        for item in elem.findall(".//object"):
+            _fix_embed(item)
+    return tree
+
 
 
 def process_non_html_elements(html, pagename):
@@ -1013,13 +1059,14 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     """
     html = process_non_html_elements(html, pagename)
     html = remove_script_tags(html)
-    p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+    p = html5lib.HTMLParser(tokenizer=html5lib.tokenizer.HTMLTokenizer,
             tree=_treebuilder,
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
+    tree = replace_mw_templates_with_includes(tree, templates)
+    tree = fix_embeds(tree)
     tree = fix_googlemaps(tree, pagename, save_data=(not historic))
     tree = remove_elements_tagged_for_removal(tree)
-    tree = replace_mw_templates_with_includes(tree, templates)
     if pagename is not None and mw_page_id:
         tree = grab_images(tree, mw_page_id, pagename,
             attach_img_to_pagename, show_img_borders)

@@ -11,6 +11,7 @@ site.addsitedir(os.path.abspath(os.path.split(sapling.__file__)[0]))
 os.environ["DJANGO_SETTINGS_MODULE"] = "sapling.settings"
 
 from import_mediawiki import process_html, fix_image_html, SCRIPT_PATH
+import import_mediawiki
 from django.conf import settings
 import sapling
 
@@ -38,7 +39,8 @@ def is_html_equal(h1, h2):
 
 class TestHTMLNormalization(unittest.TestCase):
     def setUp(self):
-        self.env = {'SCRIPT_PATH': SCRIPT_PATH}
+        self.env = {'SCRIPT_PATH': 'http://www.arborwiki.org/index.php'}
+        import_mediawiki.SCRIPT_PATH = self.env['SCRIPT_PATH']
 
     def test_internal_links(self):
         # Make sure we turn mediawiki internal links into our-style
@@ -147,6 +149,11 @@ class TestHTMLNormalization(unittest.TestCase):
         html = """<div class="adr">123 Main Street</div>"""
         expected_html = """<span class="adr">123 Main Street</span>"""
         self.assertTrue(is_html_equal(process_html(html, "Test convert special div"), expected_html))
+
+    def test_fix_embed(self):
+        html = """<p><object width="320" height="245"><param name="movie" value="http://www.archive.org/flow/FlowPlayerLight.swf?config=%7Bembedded%3Atrue%2CshowFullScreenButton%3Atrue%2CshowMuteVolumeButton%3Atrue%2CshowMenu%3Atrue%2CautoBuffering%3Atrue%2CautoPlay%3Afalse%2CinitialScale%3A%27fit%27%2CmenuItems%3A%5Bfalse%2Cfalse%2Cfalse%2Cfalse%2Ctrue%2Ctrue%2Cfalse%5D%2CusePlayOverlay%3Afalse%2CshowPlayListButtons%3Atrue%2CplayList%3A%5B%7Burl%3A%27ssfGNSTRIK1%2FssfGNSTRIK1%5F512kb%2Emp4%27%7D%5D%2CcontrolBarGloss%3A%27high%27%2CshowVolumeSlider%3Atrue%2CbaseURL%3A%27http%3A%2F%2Fwww%2Earchive%2Eorg%2Fdownload%2F%27%2Cloop%3Afalse%2CcontrolBarBackgroundColor%3A%270x000000%27%7D"/><param name="wmode" value="transparent"/><embed height="245" width="320" wmode="transparent" type="application/x-shockwave-flash" src="http://www.archive.org/flow/FlowPlayerLight.swf?config=%7Bembedded%3Atrue%2CshowFullScreenButton%3Atrue%2CshowMuteVolumeButton%3Atrue%2CshowMenu%3Atrue%2CautoBuffering%3Atrue%2CautoPlay%3Afalse%2CinitialScale%3A%27fit%27%2CmenuItems%3A%5Bfalse%2Cfalse%2Cfalse%2Cfalse%2Ctrue%2Ctrue%2Cfalse%5D%2CusePlayOverlay%3Afalse%2CshowPlayListButtons%3Atrue%2CplayList%3A%5B%7Burl%3A%27ssfGNSTRIK1%2FssfGNSTRIK1%5F512kb%2Emp4%27%7D%5D%2CcontrolBarGloss%3A%27high%27%2CshowVolumeSlider%3Atrue%2CbaseURL%3A%27http%3A%2F%2Fwww%2Earchive%2Eorg%2Fdownload%2F%27%2Cloop%3Afalse%2CcontrolBarBackgroundColor%3A%270x000000%27%7D"/></object></p>"""
+        expected_html = '<p><span class="plugin embed">&lt;iframe width="320" height="245" src="http://www.archive.org/embed/ssfGNSTRIK1"/&gt;</span></p>'
+        self.assertEqual(process_html(html, "Test fix embeds"), expected_html)
 
 def run():
     unittest.main()
