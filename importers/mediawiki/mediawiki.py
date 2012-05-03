@@ -24,6 +24,13 @@ from django.db import transaction
 from pages.plugins import unquote_url
 from django.db.utils import IntegrityError
 
+_maps_installed = False
+try:
+    import maps.models
+    _maps_installed = True
+except ImportError:
+    pass
+
 
 def guess_api_endpoint(url):
     return urljoin(url, 'api.php')
@@ -1321,8 +1328,9 @@ def run():
     import_pages()
     print "Importing redirects..."
     import_redirects()
-    print "Processing map data..."
-    process_mapdata()
+    if _maps_installed:
+        print "Processing map data..."
+        process_mapdata()
     print "Import completed in %.2f minutes" % ((time.time() - start) / 60.0)
 
 if __name__ == '__main__':
