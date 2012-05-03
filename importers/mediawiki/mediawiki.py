@@ -1,11 +1,11 @@
 import os
 import site
-import sapling
-import sapling.manage  # this will add virtualenv paths
-site.addsitedir(os.path.abspath(os.path.split(sapling.__file__)[0]))
-os.environ["DJANGO_SETTINGS_MODULE"] = "sapling.settings"
-
 import sys
+
+if "DJANGO_SETTINGS_MODULE" not in os.environ:
+    print "This importer must be run from the manage.py script"
+    sys.exit(1)
+
 import time
 import hashlib
 import html5lib
@@ -19,8 +19,9 @@ import urllib
 import re
 from dateutil.parser import parse as date_parse
 from mediawikitools import *
+
 from django.db import transaction
-from sapling.pages.plugins import unquote_url
+from pages.plugins import unquote_url
 from django.db.utils import IntegrityError
 
 
