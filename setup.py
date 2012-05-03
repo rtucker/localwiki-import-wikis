@@ -7,9 +7,9 @@ setup(
     url='http://localwiki.org',
     packages = find_packages(),
     install_requires=[
-        'mediawikitools==1.2.0-custom',
+        'mediawikitools==1.2.0',
     ],
     dependency_links=[
-        'https://github.com/mivanov/python-mediawikitools/tarball/master#egg=mediawikitools-1.2.0-custom',
+        'https://github.com/mivanov/python-mediawikitools/tarball/master#egg=mediawikitools-1.2.0',
     ],
 )
