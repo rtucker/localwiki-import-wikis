@@ -1,0 +1,4 @@
+ * Usernames are case sensitive in mediawiki.  We need to normalize on
+   import somehow.  Rename on import?  "MattH" and "Matth" -> "MattH" and "Matth_2" ?
+ * Turn <object> into <iframe> when possible -- likely we can only
+   handle certain providers like archive.org, etc. Otherwise turn into... links?

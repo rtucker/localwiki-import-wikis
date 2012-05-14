@@ -1,5 +1,0 @@
- * Usernames are case sensitive in mediawiki.  We need to normalize on
-   import somehow.  Rename on import?  "MattH" and "Matth" -> "MattH" and "Matth_2" ?
- * Fix bug with templates sometimes not getting turned into includes
- * Turn categories into tags -- when we have tagging.
- * Speed up import. Threads / greenlets, or something.
