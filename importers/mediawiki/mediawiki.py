@@ -484,10 +484,12 @@ def _get_templates_on_page(pagename):
     return [e['title'] for e in page_info['templates']]
 
 
-def _render_template(template_name):
+def _render_template(template_name, page_title=None):
+    if page_title is None:
+        page_title = template_name
     name_part = template_name[len('Template:'):]
     wikitext = '{{%s}}' % name_part
-    html = parse_wikitext(wikitext, template_name)
+    html = parse_wikitext(wikitext, page_title)
     return html
 
 
@@ -521,7 +523,7 @@ def create_mw_template_as_page(template_name, template_html):
     return include_name
 
 
-def replace_mw_templates_with_includes(tree, templates):
+def replace_mw_templates_with_includes(tree, templates, page_title):
     """
     Replace {{templatethings}} inside of pages with our page include plugin.
 
@@ -549,7 +551,8 @@ def replace_mw_templates_with_includes(tree, templates):
 
     html = _convert_to_string(tree)
     for template in templates:
-        template_html = _normalize_html(_render_template(template)).strip()
+        normalized = _normalize_html(_render_template(template, page_title))
+        template_html = normalized.strip()
         if template_html and template_html in html:
             # It's an include-style template.
             include_pagename = create_mw_template_as_page(template,
@@ -1072,7 +1075,7 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
             tree=_treebuilder,
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
-    tree = replace_mw_templates_with_includes(tree, templates)
+    tree = replace_mw_templates_with_includes(tree, templates, pagename)
     tree = fix_embeds(tree)
     tree = fix_googlemaps(tree, pagename, save_data=(not historic))
     tree = remove_elements_tagged_for_removal(tree)
