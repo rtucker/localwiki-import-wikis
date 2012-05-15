@@ -654,6 +654,45 @@ def fix_embeds(tree):
     return tree
 
 
+def fix_references(tree):
+    """
+    Replace <li id="cite_blah"> with <li><a name="cite_blah"></a>
+    """
+
+    def _fix_reference(elem):
+        if 'id' not in elem.attrib:
+            return
+        text = elem.text or ''
+        elem.text = ''
+        # remove arrow up thing
+        if len(text) and text[0] == u"\u2191":
+            text = text[1:]
+        # remove back-links to citations
+        for item in elem.findall(".//a[@href]"):
+            if item.attrib['href'].startswith('#'):
+                parent = item.getparent()
+                if parent.tag == 'sup':
+                    text += parent.tail or ''
+                    parent.getparent().remove(parent)
+                else:
+                    text += item.tail or ''
+                    parent.remove(item)
+        # create anchor
+        anchor = etree.Element('a')
+        anchor.attrib['name'] = elem.attrib['id']
+        elem.insert(0, anchor)
+        anchor.tail = text.lstrip()
+
+    for elem in tree:
+        if elem is None or isinstance(elem, basestring):
+            continue
+        if elem.tag == 'li':
+            _fix_reference(elem)
+            continue
+        for item in elem.findall(".//li"):
+            _fix_reference(item)
+    return tree
+
 
 def process_non_html_elements(html, pagename):
     """
@@ -1076,6 +1115,7 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
     tree = replace_mw_templates_with_includes(tree, templates, pagename)
+    tree = fix_references(tree)
     tree = fix_embeds(tree)
     tree = fix_googlemaps(tree, pagename, save_data=(not historic))
     tree = remove_elements_tagged_for_removal(tree)
