@@ -32,6 +32,12 @@ except ImportError:
     pass
 
 
+site = None
+SCRIPT_PATH = None
+include_pages_to_create = []
+mapdata_objects_to_create = []
+
+
 def guess_api_endpoint(url):
     return urljoin(url, 'api.php')
 
@@ -45,10 +51,9 @@ def guess_script_path(url):
     return urljoin(mw_path, '.')
 
 
-site = None
-SCRIPT_PATH = None
-include_pages_to_create = []
-mapdata_objects_to_create = []
+def set_script_path(path):
+    global SCRIPT_PATH
+    SCRIPT_PATH = path
 
 
 def process_concurrently(work_items, work_func, num_workers=1, name='items'):

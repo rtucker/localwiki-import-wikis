@@ -1,19 +1,14 @@
 import os
 import site
-import sys
 import unittest
 from lxml import etree
 import html5lib
-from html5lib import sanitizer
 
 import sapling
 site.addsitedir(os.path.abspath(os.path.split(sapling.__file__)[0]))
 os.environ["DJANGO_SETTINGS_MODULE"] = "sapling.settings"
 
-from import_mediawiki import process_html, fix_image_html, SCRIPT_PATH
-import import_mediawiki
-from django.conf import settings
-import sapling
+from importers import mediawiki
 
 
 def _convert_to_string(l):
@@ -40,7 +35,7 @@ def is_html_equal(h1, h2):
 class TestHTMLNormalization(unittest.TestCase):
     def setUp(self):
         self.env = {'SCRIPT_PATH': 'http://www.arborwiki.org/index.php'}
-        import_mediawiki.SCRIPT_PATH = self.env['SCRIPT_PATH']
+        mediawiki.set_script_path(self.env['SCRIPT_PATH'])
 
     def test_internal_links(self):
         # Make sure we turn mediawiki internal links into our-style
@@ -51,14 +46,14 @@ class TestHTMLNormalization(unittest.TestCase):
 <p>And now a link: <a href="%(SCRIPT_PATH)s?title=Waverly_Road&amp;action=edit&amp;redlink=1" class="new" title="Waverly Road (page does not exist)">Waverly Road</a> woo!</p>""" % self.env
         expected_html = """<p>Some text here</p>
 <p>And now a link: <a href="Waverly%20Road">Waverly Road</a> woo!</p>"""
-        self.assertTrue(is_html_equal(process_html(html), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html), expected_html))
 
         # A link to a page that does exist.
         html = """<p>Some text here</p>
 <p>And now a link: <a href="%(SCRIPT_PATH)s/Ann_Arbor" title="Ann Arbor">Ann Arbor</a> woo!</p>""" % self.env
         expected_html = """<p>Some text here</p>
 <p>And now a link: <a href="Ann%20Arbor">Ann Arbor</a> woo!</p>"""
-        self.assertTrue(is_html_equal(process_html(html), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html), expected_html))
 
         # A link to a redirect in MW.
         html = """<a href="%(SCRIPT_PATH)s/Ypsilanti" title="Ypsilanti" class="mw-redirect">Ypsilanti</a>""" % self.env
@@ -67,27 +62,27 @@ class TestHTMLNormalization(unittest.TestCase):
     def test_fix_i_b_tags(self):
         html = """<p>Some <i>text <b>here</b></i></p><p>and <i>then</i> <b>some</b> more</p>"""
         expected_html = """<p>Some <em>text <strong>here</strong></em></p><p>and <em>then</em> <strong>some</strong> more</p>"""
-        self.assertTrue(is_html_equal(process_html(html), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html), expected_html))
 
     def test_remove_headline_labels(self):
         html = """<h2><span class="mw-headline" id="Water"> Water </span></h2>"""
         expected_html = """<h2>Water</h2>"""
-        self.assertTrue(is_html_equal(process_html(html), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html), expected_html))
 
     def test_remove_edit_labels(self):
         html = """<h2><span class="editsection">[<a href="%(SCRIPT_PATH)s?title=After-hours_emergency&amp;action=edit&amp;section=2" title="Edit section: Water">edit</a>]</span> <span class="mw-headline" id="Water"> Water </span></h2>""" % self.env
         expected_html = """<h2>Water</h2>"""
-        self.assertTrue(is_html_equal(process_html(html), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html), expected_html))
 
     def test_skip_small_tag(self):
         html = """<p>this is some <small>small text</small> here.</p>"""
         expected_html = """<p>this is some small text here.</p>"""
-        self.assertTrue(is_html_equal(process_html(html), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html), expected_html))
 
     def test_google_maps(self):
         html = """<p>stuff</p>&lt;googlemap lat="42.243338" lon="-83.616152" zoom="19" scale="yes" overview="yes"&gt; &lt;/googlemap&gt;"""
         expected_html = """<p>stuff</p>"""
-        self.assertTrue(is_html_equal(process_html(html, "Test pagename"), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html, "Test pagename"), expected_html))
 
     def test_image_html_fixing(self):
         mw_img_title = 'File:1873-Walling-map-excerpt.png'
@@ -100,7 +95,7 @@ class TestHTMLNormalization(unittest.TestCase):
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
         tree = p.parseFragment(html, encoding='UTF-8')
-        fixed_tree = fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
+        fixed_tree = mediawiki.fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
         fixed_html = _convert_to_string(fixed_tree)
         expected_html = """<span class="image_frame image_frame_border image_right"><img src="_files/1873-Walling-map-excerpt.png" style="width: 300px; height: 296px;"/><span class="image_caption" style="width: 300px;">Ann Arbor <b>Township</b> portion of 1873 Walling map via David Rumsey <a href="%(SCRIPT_PATH)s?title=Historical_Map_Collection&amp;action=edit&amp;redlink=1" class="new" title="Historical Map Collection (page does not exist)">Historical Map Collection</a></span></span><p>Map of Washtenaw County, Michigan. Drawn, compiled, and edited by <a href="%(SCRIPT_PATH)s/H.F._Walling" class="mw-redirect" title="H.F. Walling">H.F. Walling</a>, C.E. ... Published by R.M. &amp; S.T. Tackabury, Detroit, Mich. Entered ... 1873, by H.F. Walling ... Washington. The Claremont Manufacturing Company, Claremont, N.H., Book Manufacturers
 </p>""" % self.env
@@ -124,7 +119,7 @@ class TestHTMLNormalization(unittest.TestCase):
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
         tree = p.parseFragment(html, encoding='UTF-8')
-        fixed_tree = fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
+        fixed_tree = mediawiki.fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
         fixed_html = _convert_to_string(fixed_tree)
         self.assertTrue(is_html_equal(fixed_html, expected_html))
 
@@ -138,22 +133,22 @@ class TestHTMLNormalization(unittest.TestCase):
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
         tree = p.parseFragment(html, encoding='UTF-8')
-        fixed_tree = fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
+        fixed_tree = mediawiki.fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree)
         fixed_html = _convert_to_string(fixed_tree)
         self.assertTrue(is_html_equal(fixed_html, expected_html))
 
     def test_convert_div(self):
         html = """<div>Blah</div>"""
         expected_html = """<table><tr><td>Blah</td></tr></table>"""
-        self.assertTrue(is_html_equal(process_html(html, "Test convert div"), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html, "Test convert div"), expected_html))
         html = """<div class="adr">123 Main Street</div>"""
         expected_html = """<span class="adr">123 Main Street</span>"""
-        self.assertTrue(is_html_equal(process_html(html, "Test convert special div"), expected_html))
+        self.assertTrue(is_html_equal(mediawiki.process_html(html, "Test convert special div"), expected_html))
 
     def test_fix_embed(self):
         html = """<p><object width="320" height="245"><param name="movie" value="http://www.archive.org/flow/FlowPlayerLight.swf?config=%7Bembedded%3Atrue%2CshowFullScreenButton%3Atrue%2CshowMuteVolumeButton%3Atrue%2CshowMenu%3Atrue%2CautoBuffering%3Atrue%2CautoPlay%3Afalse%2CinitialScale%3A%27fit%27%2CmenuItems%3A%5Bfalse%2Cfalse%2Cfalse%2Cfalse%2Ctrue%2Ctrue%2Cfalse%5D%2CusePlayOverlay%3Afalse%2CshowPlayListButtons%3Atrue%2CplayList%3A%5B%7Burl%3A%27ssfGNSTRIK1%2FssfGNSTRIK1%5F512kb%2Emp4%27%7D%5D%2CcontrolBarGloss%3A%27high%27%2CshowVolumeSlider%3Atrue%2CbaseURL%3A%27http%3A%2F%2Fwww%2Earchive%2Eorg%2Fdownload%2F%27%2Cloop%3Afalse%2CcontrolBarBackgroundColor%3A%270x000000%27%7D"/><param name="wmode" value="transparent"/><embed height="245" width="320" wmode="transparent" type="application/x-shockwave-flash" src="http://www.archive.org/flow/FlowPlayerLight.swf?config=%7Bembedded%3Atrue%2CshowFullScreenButton%3Atrue%2CshowMuteVolumeButton%3Atrue%2CshowMenu%3Atrue%2CautoBuffering%3Atrue%2CautoPlay%3Afalse%2CinitialScale%3A%27fit%27%2CmenuItems%3A%5Bfalse%2Cfalse%2Cfalse%2Cfalse%2Ctrue%2Ctrue%2Cfalse%5D%2CusePlayOverlay%3Afalse%2CshowPlayListButtons%3Atrue%2CplayList%3A%5B%7Burl%3A%27ssfGNSTRIK1%2FssfGNSTRIK1%5F512kb%2Emp4%27%7D%5D%2CcontrolBarGloss%3A%27high%27%2CshowVolumeSlider%3Atrue%2CbaseURL%3A%27http%3A%2F%2Fwww%2Earchive%2Eorg%2Fdownload%2F%27%2Cloop%3Afalse%2CcontrolBarBackgroundColor%3A%270x000000%27%7D"/></object></p>"""
         expected_html = '<p><span class="plugin embed">&lt;iframe width="320" height="245" src="http://www.archive.org/embed/ssfGNSTRIK1"/&gt;</span></p>'
-        self.assertEqual(process_html(html, "Test fix embeds"), expected_html)
+        self.assertEqual(mediawiki.process_html(html, "Test fix embeds"), expected_html)
 
 def run():
     unittest.main()
