@@ -301,7 +301,8 @@ def parse_wikitext(wikitext, title):
 def _convert_to_string(l):
     s = ''
     for e in l:
-        if e is None:
+        # ignore broken elements and HTML comments
+        if e is None or isinstance(e, etree._Comment):
             continue
         if isinstance(e, basestring):
             s += e
