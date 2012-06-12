@@ -314,7 +314,7 @@ def _convert_to_string(l):
         elif isinstance(e, list):
             s += _convert_to_string(e)
         else:
-            s += etree.tostring(e, encoding='UTF-8')
+            s += etree.tostring(e, method='html', encoding='UTF-8')
     return s.decode('utf-8')
 
 
@@ -402,6 +402,12 @@ def fix_basic_tags(tree):
             elem.tag = 'strong'
         for item in elem.findall('.//font'):
             item.tag = 'strong'
+
+        # Replace <code> with <tt>
+        if elem.tag == 'code':
+            elem.tag = 'tt'
+        for item in elem.findall('.//code'):
+            item.tag = 'tt'
 
     return tree
 
