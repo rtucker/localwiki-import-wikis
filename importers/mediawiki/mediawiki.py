@@ -21,6 +21,7 @@ from dateutil.parser import parse as date_parse
 from mediawikitools import *
 
 from django.db import transaction
+from django.db import IntegrityError, connection
 from pages.plugins import unquote_url
 from django.db.utils import IntegrityError
 
@@ -175,13 +176,16 @@ def import_redirect(from_pagename):
         return
     if not Redirect.objects.filter(source=slugify(from_pagename)):
         r = Redirect(source=slugify(from_pagename), destination=to_page)
-        r.save(user=u, comment="Automated edit. Creating redirect.")
+        try:
+            r.save(user=u, comment="Automated edit. Creating redirect.")
+        except IntegrityError:
+            connection.close()
         print "Redirect %s --> %s created" % (from_pagename.encode('utf-8'), to_pagename.encode('utf-8'))
 
 def import_redirects():
     redirects = [mw_p.title for mw_p in get_redirects()]
     process_concurrently(redirects, import_redirect,
-                         num_workers=4, name='redirects')
+                         num_workers=10, name='redirects')
 
 
 def process_mapdata():
@@ -209,7 +213,10 @@ def process_mapdata():
         else:
             points = MultiPoint(point)
             m = MapData(page=p, points=points)
-        m.save()
+        try:
+            m.save()
+        except IntegrityError:
+            connection.close()
 
 
 def parse_page(page_name):
@@ -309,8 +316,10 @@ def _convert_to_string(l):
         # ignore broken elements and HTML comments
         if e is None or isinstance(e, etree._Comment):
             continue
-        if isinstance(e, basestring):
+        if type(e) == str:
             s += e
+        elif type(e) == unicode:
+            s += e.encode('utf-8')
         elif isinstance(e, list):
             s += _convert_to_string(e)
         else:
@@ -593,6 +602,8 @@ def fix_googlemaps(tree, pagename, save_data=True):
         if not save_data:
             return
         img = elem.find('.//img')
+        if not img:
+            return
         src = img.attrib.get('src')
         center = parse_qs(urlparse(src).query)['center']
         lat, lon = center[0].split(',')
@@ -894,7 +905,12 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
         image_title = image_dict['title']
         filename = image_title[len('File:'):]
         # Get the image info for this image title
-        image_info = get_image_info(image_title)
+        try:
+            image_info = get_image_info(image_title)
+        except KeyError:
+            # For some reason we can't get the image info.
+            # TODO: Investigate this.
+            continue
         image_url = image_info['url']
         image_description_url = image_info['descriptionurl']
         
@@ -925,10 +941,13 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
         img_ptr.close()
 
         # Create the PageFile and associate it with the current page.
-        print "Creating image %s on page %s" % (filename, pagename.encode('utf-8'))
-        pfile = PageFile(name=filename, slug=slugify(attach_to_pagename))
-        pfile.file.save(filename, file_content, save=False)
-        pfile.save(user=robot, comment="Automated edit. Creating file.")
+        print "Creating image %s on page %s" % (filename.encode('utf-8'), pagename.encode('utf-8'))
+        try:
+            pfile = PageFile(name=filename, slug=slugify(attach_to_pagename))
+            pfile.file.save(filename, file_content, save=False)
+            pfile.save(user=robot, comment="Automated edit. Creating file.")
+        except IntegrityError:
+            connection.close()
 
     return tree
 
@@ -1210,7 +1229,10 @@ def create_page_revisions(p, mw_p, parsed_page):
             history_user_id=history_user_id,
             history_user_ip=history_user_ip
         )
-        p_h.save()
+        try:
+            p_h.save()
+        except IntegrityError:
+            connection.close()
         print "Imported historical page %s" % p.name.encode('utf-8')
 
 
@@ -1246,12 +1268,12 @@ def import_page(mw_p):
     name = fix_pagename(mw_p.title)
 
     if Page.objects.filter(slug=slugify(name)).exists():
-        print "Page %s already exists" % name
+        print "Page %s already exists" % name.encode('utf-8')
         # Page already exists with this slug.  This is probably because
         # MediaWiki has case-sensitive pagenames.
         other_page = Page.objects.get(slug=slugify(name))
         if len(html) > other_page.content:
-            print "Clearing out other page..", other_page
+            print "Clearing out other page..", other_page.name.encode('utf-8')
             # *This* page has more content.  Let's use it instead.
             for other_page_version in other_page.versions.all():
                 other_page_version.delete()
@@ -1280,8 +1302,16 @@ def import_page(mw_p):
     if not (p.content.strip()):
         return  # page content can't be blank
     p.clean_fields()
-    p.save(track_changes=False)
-    create_page_revisions(p, mw_p, parsed)
+    try:
+       p.save(track_changes=False)
+    except IntegrityError:
+       connection.close()
+    try:
+       create_page_revisions(p, mw_p, parsed)
+    except KeyError:
+       # For some reason the response lacks a revisions key
+       # TODO: figure out why
+       pass
     process_page_categories(p, parsed['categories'])
 
 
@@ -1289,7 +1319,7 @@ def import_pages():
     print "Getting master page list ..."
     get_robot_user() # so threads won't try to create one concurrently
     pages = get_page_list()
-    process_concurrently(pages, import_page, num_workers=4, name='pages')
+    process_concurrently(pages, import_page, num_workers=10, name='pages')
 
 
 def process_page_categories(page, categories):
