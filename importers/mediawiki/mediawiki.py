@@ -1,3 +1,4 @@
+# coding=utf-8
 import os
 import site
 import sys
@@ -599,7 +600,7 @@ def replace_mw_templates_with_includes(tree, templates, page_title):
 
 def fix_smw_points(tree, pagename, save_data=True):
     """
-    NOT WORKING YET
+    NOT WORKING YET, DON'T USE
 
     Try to save geo data when it's in a SMW format. This can vary wildly,
     unfortunately, so we'll need to adjust for each wiki.
@@ -607,7 +608,6 @@ def fix_smw_points(tree, pagename, save_data=True):
     def _parse_mapdata(elem):
         lat_re = '((\d+)°(\d+)′(\d*.?\d*)″([NS])'
         lon_re = '((\d+)°(\d+)′(\d*.?\d*)″([EW])'
-        elem.
 
     def _matches(elem):
         if elem is None or isinstance(elem, basestring):
