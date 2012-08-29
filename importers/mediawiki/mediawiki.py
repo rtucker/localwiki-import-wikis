@@ -185,7 +185,7 @@ def import_redirect(from_pagename):
 def import_redirects():
     redirects = [mw_p.title for mw_p in get_redirects()]
     process_concurrently(redirects, import_redirect,
-                         num_workers=10, name='redirects')
+                         num_workers=4, name='redirects')
 
 
 def process_mapdata():
@@ -595,6 +595,38 @@ def replace_mw_templates_with_includes(tree, templates, page_title):
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
     return tree
+
+
+def fix_smw_points(tree, pagename, save_data=True):
+    """
+    NOT WORKING YET
+
+    Try to save geo data when it's in a SMW format. This can vary wildly,
+    unfortunately, so we'll need to adjust for each wiki.
+    """
+    def _parse_mapdata(elem):
+        lat_re = '((\d+)°(\d+)′(\d*.?\d*)″([NS])'
+        lon_re = '((\d+)°(\d+)′(\d*.?\d*)″([EW])'
+        elem.
+
+    def _matches(elem):
+        if elem is None or isinstance(elem, basestring):
+            return False
+        if elem.tag is not 'span':
+            return False
+        if 'smwttcontent' not in elem.attrib.get('class', '').split():
+            return False
+        return True
+
+    for elem in tree:
+        if _matches(elem):
+            _parse_mapdata(elem)
+            elem.tag = 'removeme'
+            continue
+        for item in elem.findall(".//span"):
+            if _matches(elem):
+                _parse_mapdata(elem)
+                elem.tag = 'removeme'
 
 
 def fix_googlemaps(tree, pagename, save_data=True):
@@ -1325,7 +1357,7 @@ def import_pages():
     print "Getting master page list ..."
     get_robot_user() # so threads won't try to create one concurrently
     pages = get_page_list()
-    process_concurrently(pages, import_page, num_workers=10, name='pages')
+    process_concurrently(pages, import_page, num_workers=4, name='pages')
 
 
 def process_page_categories(page, categories):
