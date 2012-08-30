@@ -27,7 +27,7 @@ def find_non_googlemaps_coordinates(html, pagename):
 if __name__ == '__main__':
     mapdata_objects_to_create = []
 
-html1 = """<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+    html1 = """<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en" dir="ltr">
   <head>
          <!-- More changes by paul 5/26/07 to get category tree to not throw "wgServer is not defined" error. We may need to look further at basic structure of g-wiki skin. Beagle was over a year old when we started redesigning it.-->
@@ -366,7 +366,7 @@ urchinTracker();
   </body>
 </html>"""
 
-html2 = """<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+    html2 = """<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en" dir="ltr">
   <head>
          <!-- More changes by paul 5/26/07 to get category tree to not throw "wgServer is not defined" error. We may need to look further at basic structure of g-wiki skin. Beagle was over a year old when we started redesigning it.-->
