@@ -1,3 +1,4 @@
+venv
 *.py[cod]
 
 # C extensions
@@ -35,4 +36,4 @@ nosetests.xml
 #Pydev
 .project
 .pydevproject
-
+.settings

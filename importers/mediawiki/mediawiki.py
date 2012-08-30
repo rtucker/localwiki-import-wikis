@@ -26,6 +26,8 @@ from django.db import IntegrityError, connection
 from pages.plugins import unquote_url
 from django.db.utils import IntegrityError
 
+from coord_finder import find_non_googlemaps_coordinates
+
 _maps_installed = False
 try:
     import maps.models
@@ -87,9 +89,9 @@ def process_concurrently(work_items, work_func, num_workers=1, name='items'):
             q.task_done()
 
     for i in range(num_workers):
-         t = Thread(target=worker)
-         t.daemon = True
-         t.start()
+        t = Thread(target=worker)
+        t.daemon = True
+        t.start()
     # wait for all workers to finish
     q.join()
 
@@ -752,6 +754,9 @@ def process_non_html_elements(html, pagename):
     return html
 
 
+
+
+
 def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
         border=True):
     # Images start with something like this:
@@ -1145,6 +1150,13 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     a rendered MediaWiki page and process bits and pieces of it, normalize
     elements / attributes and return cleaned up HTML.
     """
+    
+    # Find non-Google Maps geolocation coordinates
+    global mapdata_objects_to_create
+    coord = find_non_googlemaps_coordinates(html, pagename)
+    if coord:
+        mapdata_objects_to_create.append(coord)
+    
     html = process_non_html_elements(html, pagename)
     html = remove_script_tags(html)
     p = html5lib.HTMLParser(tokenizer=html5lib.tokenizer.HTMLTokenizer,
