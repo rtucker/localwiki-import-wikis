@@ -200,7 +200,10 @@ def process_mapdata():
 
     for item in mapdata_objects_to_create:
         print "Adding mapdata for", item['pagename'].encode('utf-8')
-        p = Page.objects.get(slug=slugify(item['pagename']))
+        try:
+            p = Page.objects.get(slug=slugify(item['pagename']))
+        except Page.DoesNotExist:
+            continue
 
         mapdata = MapData.objects.filter(page=p)
         y = float(item['lat'])
@@ -598,37 +601,6 @@ def replace_mw_templates_with_includes(tree, templates, page_title):
     return tree
 
 
-def fix_smw_points(tree, pagename, save_data=True):
-    """
-    NOT WORKING YET, DON'T USE
-
-    Try to save geo data when it's in a SMW format. This can vary wildly,
-    unfortunately, so we'll need to adjust for each wiki.
-    """
-    def _parse_mapdata(elem):
-        lat_re = '((\d+)°(\d+)′(\d*.?\d*)″([NS])'
-        lon_re = '((\d+)°(\d+)′(\d*.?\d*)″([EW])'
-
-    def _matches(elem):
-        if elem is None or isinstance(elem, basestring):
-            return False
-        if elem.tag is not 'span':
-            return False
-        if 'smwttcontent' not in elem.attrib.get('class', '').split():
-            return False
-        return True
-
-    for elem in tree:
-        if _matches(elem):
-            _parse_mapdata(elem)
-            elem.tag = 'removeme'
-            continue
-        for item in elem.findall(".//span"):
-            if _matches(elem):
-                _parse_mapdata(elem)
-                elem.tag = 'removeme'
-
-
 def fix_googlemaps(tree, pagename, save_data=True):
     """
     If the googlemaps extension is installed, then we process googlemaps here.
@@ -640,7 +612,7 @@ def fix_googlemaps(tree, pagename, save_data=True):
         if not save_data:
             return
         img = elem.find('.//img')
-        if not img:
+        if img is None:
             return
         src = img.attrib.get('src')
         center = parse_qs(urlparse(src).query)['center']
@@ -1338,7 +1310,7 @@ def import_page(mw_p):
                              mw_page_id=mw_p.pageid, historic=False)
 
     if not (p.content.strip()):
-        return  # page content can't be blank
+        p.content = '<p> </p>' # page content can't be blank
     p.clean_fields()
     try:
        p.save(track_changes=False)
