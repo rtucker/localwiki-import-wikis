@@ -87,9 +87,9 @@ def process_concurrently(work_items, work_func, num_workers=1, name='items'):
             q.task_done()
 
     for i in range(num_workers):
-         t = Thread(target=worker)
-         t.daemon = True
-         t.start()
+        t = Thread(target=worker)
+        t.daemon = True
+        t.start()
     # wait for all workers to finish
     q.join()
 
