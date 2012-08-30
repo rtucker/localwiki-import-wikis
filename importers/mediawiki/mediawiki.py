@@ -199,10 +199,13 @@ def process_mapdata():
     from django.contrib.gis.geos import Point, MultiPoint
 
     for item in mapdata_objects_to_create:
-        print "Adding mapdata for", item['pagename'].encode('utf-8')
+        page_name = item['pagename'].encode('utf-8')
+        print "Adding mapdata for", page_name
         try:
             p = Page.objects.get(slug=slugify(item['pagename']))
         except Page.DoesNotExist:
+            print "*** Warning *** Skipping mapdata for page", page_name
+            print "    Found mapdata for the page on wikimedia site, but the page does not exist in localwiki."
             continue
 
         mapdata = MapData.objects.filter(page=p)
