@@ -186,7 +186,7 @@ def import_redirect(from_pagename):
 def import_redirects():
     redirects = [mw_p.title for mw_p in get_redirects()]
     process_concurrently(redirects, import_redirect,
-                         num_workers=4, name='redirects')
+                         num_workers=2, name='redirects')
 
 
 def process_mapdata():
@@ -1332,7 +1332,7 @@ def import_pages():
     print "Getting master page list ..."
     get_robot_user() # so threads won't try to create one concurrently
     pages = get_page_list()
-    process_concurrently(pages, import_page, num_workers=4, name='pages')
+    process_concurrently(pages, import_page, num_workers=2, name='pages')
 
 
 def process_page_categories(page, categories):
