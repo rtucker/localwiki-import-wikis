@@ -41,6 +41,8 @@ mapdata_objects_to_create = []
 
 
 def guess_api_endpoint(url):
+    if url.endswith('api.php'):
+        return url
     return urljoin(url, 'api.php')
 
 
@@ -81,7 +83,6 @@ def process_concurrently(work_items, work_func, num_workers=1, name='items'):
             try:
                 work_func(item)
             except:
-                
                 traceback.print_exc()
                 "Unable to process %s" % item
             q.task_done()
@@ -181,7 +182,9 @@ def import_redirect(from_pagename):
             r.save(user=u, comment="Automated edit. Creating redirect.")
         except IntegrityError:
             connection.close()
-        print "Redirect %s --> %s created" % (from_pagename.encode('utf-8'), to_pagename.encode('utf-8'))
+        print "Redirect %s --> %s created" % (from_pagename.encode('utf-8'),
+                                              to_pagename.encode('utf-8'))
+
 
 def import_redirects():
     redirects = [mw_p.title for mw_p in get_redirects()]
@@ -205,7 +208,8 @@ def process_mapdata():
             p = Page.objects.get(slug=slugify(item['pagename']))
         except Page.DoesNotExist:
             print "*** Warning *** Skipping mapdata for page", page_name
-            print "    Found mapdata for the page on wikimedia site, but the page does not exist in localwiki."
+            print ("    Found mapdata for the page on wikimedia site, but "
+                   "the page does not exist in localwiki.")
             continue
 
         mapdata = MapData.objects.filter(page=p)
@@ -356,7 +360,7 @@ def _get_wiki_link(link):
         href = link.attrib['href']
         if _is_wiki_page_url(href):
             title = link.attrib.get('title')
-            if 'new' in link.attrib.get('class', '').split():
+            if has_class('new', link):
                 # It's a link to a non-existent page, so we parse the
                 # page name from the title attribute in a really
                 # hacky way.  Titles for non-existent links look
@@ -428,12 +432,18 @@ def fix_basic_tags(tree):
     return tree
 
 
+def has_class(css_class, elem):
+    attrib = elem.get('class')
+    if attrib:
+        return css_class in attrib.split()
+    return False
+
+
 def remove_edit_links(tree):
     for elem in tree:
         if elem is None or isinstance(elem, basestring):
             continue
-        if (elem.tag == 'span' and
-            ('editsection' in elem.attrib.get('class').split())):
+        if elem.tag == 'span' and has_class('editsection', elem):
             elem.tag = 'removeme'
         for item in elem.findall(".//span[@class='editsection']"):
             item.tag = 'removeme'  # hack to easily remove a bunch of elements
@@ -462,8 +472,7 @@ def remove_headline_labels(tree):
             continue
         for parent in elem.getiterator():
             for child in parent:
-                if (child.tag == 'span' and
-                    'mw-headline' in child.attrib.get('class', '').split()):
+                if child.tag == 'span' and has_class('mw-headline', child):
                     parent.text = parent.text or ''
                     parent.tail = parent.tail or ''
                     if child.text:
@@ -545,7 +554,8 @@ def create_mw_template_as_page(template_name, template_html):
         p.clean_fields()
         # check if it exists again, processing takes time
         if not Page.objects.filter(slug=slugify(include_name)):
-            p.save(user=robot, comment="Automated edit. Creating included page.")
+            p.save(user=robot,
+                   comment="Automated edit. Creating included page.")
 
     return include_name
 
@@ -568,8 +578,8 @@ def replace_mw_templates_with_includes(tree, templates, page_title):
 
     def _normalize_html(s):
         p = html5lib.HTMLParser(tokenizer=html5lib.tokenizer.HTMLTokenizer,
-            tree=_treebuilder,
-            namespaceHTMLElements=False)
+                                tree=_treebuilder,
+                                namespaceHTMLElements=False)
         tree = p.parseFragment(s, encoding='UTF-8')
         return _convert_to_string(tree)
 
@@ -583,23 +593,23 @@ def replace_mw_templates_with_includes(tree, templates, page_title):
         if template_html and template_html in html:
             # It's an include-style template.
             include_pagename = create_mw_template_as_page(template,
-                template_html)
+                                                          template_html)
             include_classes = ''
             include_html = (
                 '<a href="%(quoted_pagename)s" '
-                 'class="plugin includepage%(include_classes)s">'
-                 'Include page %(pagename)s'
+                'class="plugin includepage%(include_classes)s">'
+                'Include page %(pagename)s'
                 '</a>' % {
                     'quoted_pagename': urllib.quote(include_pagename),
                     'pagename': include_pagename,
                     'include_classes': include_classes,
-                    }
+                }
             )
             html = html.replace(template_html, include_html)
 
     p = html5lib.HTMLParser(tokenizer=html5lib.tokenizer.HTMLTokenizer,
-            tree=_treebuilder,
-            namespaceHTMLElements=False)
+                            tree=_treebuilder,
+                            namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
     return tree
 
@@ -746,14 +756,14 @@ def process_non_html_elements(html, pagename):
 
     html = re.sub(
         '(?P<map>&lt;googlemap (?P<attribs>.+?)&gt;'
-            '((.|\n)+?)'
+        '((.|\n)+?)'
         '&lt;/googlemap&gt;)',
         _repl_googlemap, html)
     return html
 
 
 def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
-        border=True):
+                   border=True):
     # Images start with something like this:
     # <a href="/mediawiki-1.16.0/index.php/File:1009-Packard.jpg"><img
     for elem in tree:
@@ -762,7 +772,7 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
         for img_a in elem.findall(".//a[@href]"):
             if img_a.find(".//img") is None:
                 continue
-            href = unquote_url(img_a.attrib.get('href', 'no href')) 
+            href = unquote_url(img_a.attrib.get('href', 'no href'))
             if href.endswith(quoted_mw_img_title):
                 # This is a link to the image with class image, so this is an
                 # image reference.
@@ -782,14 +792,14 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
                 img_elem = img_a.find('img')
                 width = img_elem.attrib.get('width')
                 height = img_elem.attrib.get('height')
-                is_thumb = 'thumbimage' in img_elem.attrib.get('class', '')
+                is_thumb = has_class('thumbimage', img_elem)
                 caption = None
                 if is_thumb:
                     img_wrapper = img_a.getparent().getparent()
                 else:
                     # Is this a floated, non-thumbnailed image
-                    if (img_a.getparent() is not None and
-                        'float' in img_a.getparent().attrib.get('class', '')):
+                    if (img_a.getparent() is not None and has_class('float',
+                                                                    img_a)):
                         img_wrapper = img_a.getparent()
                     else:
                         img_wrapper = img_a
@@ -812,9 +822,9 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
                     #     </div>
                     #   </div>
                     # </div>
-                    if 'tright' in img_wrapper.attrib.get('class'):
+                    if has_class('tright', img_wrapper):
                         extra_classes += ' image_right'
-                    elif 'tleft' in img_wrapper.attrib.get('class'):
+                    elif has_class('tleft', img_wrapper):
                         extra_classes += ' image_left'
                     # Does the image have a caption?
                     caption = img_wrapper.find(".//div[@class='thumbcaption']")
@@ -837,9 +847,9 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
                         # Caption is now clean.  Yay!
                 else:
                     # Can still be floated
-                    if 'floatright' in img_wrapper.attrib.get('class', ''):
+                    if has_class('floatright', img_wrapper):
                         extra_classes += ' image_right'
-                    elif 'floatright' in img_wrapper.attrib.get('class', ''):
+                    elif has_class('floatright', img_wrapper):
                         extra_classes += ' image_left'
 
                 img_wrapper.clear()
@@ -871,13 +881,12 @@ def page_url_to_name(page_url):
 
 
 def get_image_info(image_title):
-    params = {
-            'action': 'query',
-            'prop': 'imageinfo',
-            'imlimit': 500,
-            'titles': image_title,
-            'iiprop': 'timestamp|user|url|dimensions|comment',
-        }
+    params = {'action': 'query',
+              'prop': 'imageinfo',
+              'imlimit': 500,
+              'titles': image_title,
+              'iiprop': 'timestamp|user|url|dimensions|comment',
+              }
     req = api.APIRequest(site, params)
     response = req.query()
     info_by_pageid = response['query']['pages']
@@ -887,7 +896,7 @@ def get_image_info(image_title):
 
 
 def grab_images(tree, page_id, pagename, attach_to_pagename=None,
-        show_image_borders=True):
+                show_image_borders=True):
     """
     Imports the images on a page as PageFile objects and fixes the page's
     HTML to be what we want for images.
@@ -926,20 +935,19 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
             continue
         image_url = image_info['url']
         image_description_url = image_info['descriptionurl']
-        
+
         quoted_image_title = page_url_to_name(image_description_url)
         attach_to_pagename = attach_to_pagename or pagename
 
         if PageFile.objects.filter(name=filename,
-                slug=slugify(attach_to_pagename)):
+                                   slug=slugify(attach_to_pagename)):
             continue  # Image already exists.
 
         # For each image, find the image's supporting HTML in the tree
         # and transform it to comply with our HTML.
         html_before_fix = _convert_to_string(tree)
         tree = fix_image_html(image_title, quoted_image_title, filename, tree,
-            border=show_image_borders
-        )
+                              border=show_image_borders)
 
         if _convert_to_string(tree) == html_before_fix:
             # Image isn't actually on the page, so let's not create or attach
@@ -1051,10 +1059,9 @@ def fix_image_galleries(tree):
         # Grab all of the image spans inside of the item table.
         p = etree.Element("p")
         for image in item.findall(".//span"):
-            if not 'image_frame' in image.attrib.get('class'):
+            if not has_class('image_frame', image):
                 continue
-            caption = image.getparent().getparent(
-                ).getparent().find(".//div[@class='gallerytext']")
+            caption = image.getparent().getparent().getparent().find(".//div[@class='gallerytext']")
             # We have a gallery caption, so let's add it to our image
             # span.
             if caption is not None:
@@ -1085,7 +1092,7 @@ def fix_image_galleries(tree):
     for elem in tree:
         if elem is None or isinstance(elem, basestring):
             continue
-        if elem.tag == 'table' and elem.attrib.get('class') == 'gallery':
+        if elem.tag == 'table' and has_class('gallery', elem):
             gallery = _fix_gallery(elem)
             new_tree.append(gallery)
         else:
@@ -1108,9 +1115,9 @@ def convert_some_divs_to_tables(tree):
     # care of the rest.  This obviously won't always give the correct results,
     # but it's good enough most of the time. We convert special divs to span
     _special_classes = ['adr']
+
     def _fix(item):
-        item_class = item.attrib.get('class', '')
-        if any([c in _special_classes for c in item_class.split(' ')]):
+        if any([has_class(c, item) for c in _special_classes]):
             item.tag = 'span'
             return
         item.tag = 'table'
@@ -1139,7 +1146,8 @@ def convert_some_divs_to_tables(tree):
 
 
 def process_html(html, pagename=None, mw_page_id=None, templates=[],
-        attach_img_to_pagename=None, show_img_borders=True, historic=False):
+                 attach_img_to_pagename=None, show_img_borders=True,
+                 historic=False):
     """
     This is the real workhorse.  We take an html string which represents
     a rendered MediaWiki page and process bits and pieces of it, normalize
@@ -1148,8 +1156,8 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     html = process_non_html_elements(html, pagename)
     html = remove_script_tags(html)
     p = html5lib.HTMLParser(tokenizer=html5lib.tokenizer.HTMLTokenizer,
-            tree=_treebuilder,
-            namespaceHTMLElements=False)
+                            tree=_treebuilder,
+                            namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
     tree = replace_mw_templates_with_includes(tree, templates, pagename)
     tree = fix_references(tree)
@@ -1158,7 +1166,7 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     tree = remove_elements_tagged_for_removal(tree)
     if pagename is not None and mw_page_id:
         tree = grab_images(tree, mw_page_id, pagename,
-            attach_img_to_pagename, show_img_borders)
+                           attach_img_to_pagename, show_img_borders)
     tree = fix_internal_links(tree)
     tree = fix_basic_tags(tree)
     tree = remove_edit_links(tree)
@@ -1180,13 +1188,13 @@ def create_page_revisions(p, mw_p, parsed_page):
     from django.contrib.auth.models import User
     from pages.models import Page, slugify
 
-    request = api.APIRequest(site, {
-            'action': 'query',
-            'prop': 'revisions',
-            'rvprop': 'ids|timestamp|user|comment',
-            'rvlimit': '500',
-            'titles': mw_p.title,
-    })
+    request = api.APIRequest(site,
+                             {'action': 'query',
+                              'prop': 'revisions',
+                              'rvprop': 'ids|timestamp|user|comment',
+                              'rvlimit': '500',
+                              'titles': mw_p.title,
+                              })
     response_pages = request.query()['query']['pages']
     first_pageid = response_pages.keys()[0]
     rev_num = 0
@@ -1224,8 +1232,8 @@ def create_page_revisions(p, mw_p, parsed_page):
         # Create a dummy Page object to get the correct cleaning behavior
         dummy_p = Page(name=p.name, content=html)
         dummy_p.content = process_html(dummy_p.content, pagename=p.name,
-            templates=parsed['templates'], mw_page_id=mw_p.pageid,
-            historic=True)
+                                       templates=parsed['templates'], mw_page_id=mw_p.pageid,
+                                       historic=True)
         if not (dummy_p.content.strip()):
             dummy_p.content = '<p></p>'  # Can't be blank
         dummy_p.clean_fields()
