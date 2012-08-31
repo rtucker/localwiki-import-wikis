@@ -645,8 +645,8 @@ def fix_embeds(tree):
     Replace <object>-style embeds with <iframe> for stuff we know how to work
     with.
     """
-    def _parse_flow_player(str):
-        query = parse_qs(urlparse(str).query)
+    def _parse_flow_player(s):
+        query = parse_qs(urlparse(s).query)
         config = query.get('config', None)
         if not config:
             return ''
@@ -1154,8 +1154,11 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     # Find non-Google Maps geolocation coordinates
     global mapdata_objects_to_create
     coord = find_non_googlemaps_coordinates(html, pagename)
-    if coord:
+    if coord is not None:
         mapdata_objects_to_create.append(coord)
+        print "Queueing mapdata for %s (Lat: %s, Lon: %s)" % (coord['page'],
+                                                              coord['lat'], 
+                                                              coord['lon']) 
     
     html = process_non_html_elements(html, pagename)
     html = remove_script_tags(html)
@@ -1328,15 +1331,15 @@ def import_page(mw_p):
         p.content = '<p> </p>' # page content can't be blank
     p.clean_fields()
     try:
-       p.save(track_changes=False)
+        p.save(track_changes=False)
     except IntegrityError:
-       connection.close()
+        connection.close()
     try:
-       create_page_revisions(p, mw_p, parsed)
+        create_page_revisions(p, mw_p, parsed)
     except KeyError:
-       # For some reason the response lacks a revisions key
-       # TODO: figure out why
-       pass
+        # For some reason the response lacks a revisions key
+        # TODO: figure out why
+        pass
     process_page_categories(p, parsed['categories'])
 
 
