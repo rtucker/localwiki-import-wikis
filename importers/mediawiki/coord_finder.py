@@ -15,7 +15,7 @@ def find_non_googlemaps_coordinates(html, pagename):
         HTML: [[address:=101 South <a href="/Division_Avenue" title="Division Avenue">Division</a>]] is located in the <a href="/Heartside-Downtown" title="Heartside-Downtown">Heartside-Downtown</a> neighborhood. Geographic coordinates are <span class="smwttinline">42.960922° N, 85.66835° W<span class="smwttcontent">Latitude: 42°57′39.319″N<br />Longitude: 85°40′6.06″W</span></span>.
     We process those here.
     """
-    with open(pagename+".txt", mode="w") as f:
+    with open(pagename+".txt", "w", "utf-8-sig") as f:
         f.write(html)
     pattern = r'Geographic coordinates are <span class="smwttinline">([1-9]\d*(\.\d+)?)°[ ]?N, ([1-9]\d*(\.\d+)?)°[ ]?W<span class="smwttcontent">'
     match = re.search(pattern, html)
