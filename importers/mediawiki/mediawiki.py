@@ -1156,7 +1156,7 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     coord = find_non_googlemaps_coordinates(html, pagename)
     if coord is not None:
         mapdata_objects_to_create.append(coord)
-        print "Queueing mapdata for %s (Lat: %s, Lon: %s)" % (coord['page'],
+        print "Queueing mapdata for %s (Lat: %s, Lon: %s)" % (coord['pagename'],
                                                               coord['lat'], 
                                                               coord['lon']) 
     
