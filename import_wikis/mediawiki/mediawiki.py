@@ -21,7 +21,7 @@ from dateutil.parser import parse as date_parse
 from mediawikitools import *
 
 from django.db import transaction
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, DatabaseError, connection
 from haystack import site as haystack_site
 from pages.plugins import unquote_url
 
@@ -75,23 +75,37 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
     num_items = q.qsize()
 
     def worker():
+        from django.db import close_connection, connection
+        close_connection()
+        connection.connection = None
         while True:
-            from django.db import close_connection, connection
-            close_connection()
-            connection.connection = None
+            
 
-            items_left = q.qsize()
-            if num_items:
-                progress = 100 * (num_items - items_left) / num_items
-                print "%d %s left to process (%d%% done)" % (items_left, name,
-                                                             progress)
-            item = q.get()
             try:
-                work_func(item)
+               items_left = q.qsize()
+               if num_items:
+                   progress = 100 * (num_items - items_left) / num_items
+                   print "%d %s left to process (%d%% done)" % (items_left, name,
+                                                                progress)
+               item = q.get()
+               try:
+                   work_func(item)
+               except:
+                   traceback.print_exc()
+                   "Unable to process %s" % item
+               q.task_done()
             except:
-                traceback.print_exc()
-                "Unable to process %s" % item
-            q.task_done()
+                from django.db import close_connection, connection
+                close_connection()
+                connection.connection = None
+
+                try:
+                    # try again..
+                    work_func(item)
+                except:
+		    from django.db import close_connection, connection
+                    close_connection()
+                    connection.connection = None
 
     for i in range(num_workers):
         t = Thread(target=worker)
@@ -109,7 +123,10 @@ def get_robot_user():
     except User.DoesNotExist:
         u = User(name='LocalWiki Robot', username='LocalWikiRobot',
                  email='editrobot@localwiki.org')
-        u.save()
+        try:
+          u.save()
+        except IntegrityError:
+          pass  # another thread beat us
     return u
 
 
@@ -566,8 +583,12 @@ def create_mw_template_as_page(template_name, template_html):
         p.clean_fields()
         # check if it exists again, processing takes time
         if not Page.objects.filter(slug=slugify(include_name)):
-            p.save(user=robot,
-                   comment="Automated edit. Creating included page.")
+            try:
+              p.save(user=robot,
+                     comment="Automated edit. Creating included page.")
+            except:
+              pass  # another thread beat us
+              
 
     return include_name
 
@@ -1545,8 +1566,13 @@ def clear_out_existing_data():
 
 
 def turn_off_search():
+    from haystack import site as haystack_site
     from pages.models import Page
+    from tags.models import PageTagSet
+    from django.db import models
+
     haystack_site.unregister(Page)
+    models.signals.m2m_changed.disconnect(sender=PageTagSet.tags.through)
 
 
 def run():
