@@ -75,6 +75,10 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
 
     def worker():
         while True:
+            from django.db import close_connection, connection
+            close_connection()
+            connection.connection = None
+
             items_left = q.qsize()
             if num_items:
                 progress = 100 * (num_items - items_left) / num_items
