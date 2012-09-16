@@ -1,7 +1,9 @@
 # coding=utf-8
+
 import os
 import site
 import sys
+
 
 if "DJANGO_SETTINGS_MODULE" not in os.environ:
     print "This importer must be run from the manage.py script"
@@ -25,6 +27,7 @@ from django.db import transaction
 from django.db import IntegrityError, connection
 from pages.plugins import unquote_url
 from django.db.utils import IntegrityError
+
 
 _maps_installed = False
 try:
@@ -189,7 +192,7 @@ def import_redirect(from_pagename):
 def import_redirects():
     redirects = [mw_p.title for mw_p in get_redirects()]
     process_concurrently(redirects, import_redirect,
-                         num_workers=4, name='redirects')
+                         num_workers=1, name='redirects')
 
 
 def process_mapdata():
@@ -208,7 +211,7 @@ def process_mapdata():
             p = Page.objects.get(slug=slugify(item['pagename']))
         except Page.DoesNotExist:
             print "*** Warning *** Skipping mapdata for page", page_name
-            print ("    Found mapdata for the page on wikimedia site, but "
+            print ("    Found mapdata for the page on mediawiki site, but "
                    "the page does not exist in localwiki.")
             continue
 
@@ -228,6 +231,8 @@ def process_mapdata():
             m.save()
         except IntegrityError:
             connection.close()
+        except ValueError:
+            print "Bad value in mapdata"
 
 
 def parse_page(page_name):
@@ -653,8 +658,8 @@ def fix_embeds(tree):
     Replace <object>-style embeds with <iframe> for stuff we know how to work
     with.
     """
-    def _parse_flow_player(str):
-        query = parse_qs(urlparse(str).query)
+    def _parse_flow_player(s):
+        query = parse_qs(urlparse(s).query)
         config = query.get('config', None)
         if not config:
             return ''
@@ -760,6 +765,9 @@ def process_non_html_elements(html, pagename):
         '&lt;/googlemap&gt;)',
         _repl_googlemap, html)
     return html
+
+
+
 
 
 def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
@@ -1153,6 +1161,7 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
     a rendered MediaWiki page and process bits and pieces of it, normalize
     elements / attributes and return cleaned up HTML.
     """
+        
     html = process_non_html_elements(html, pagename)
     html = remove_script_tags(html)
     p = html5lib.HTMLParser(tokenizer=html5lib.tokenizer.HTMLTokenizer,
@@ -1324,15 +1333,16 @@ def import_page(mw_p):
         p.content = '<p> </p>' # page content can't be blank
     p.clean_fields()
     try:
-       p.save(track_changes=False)
+        p.save(track_changes=False)
     except IntegrityError:
-       connection.close()
+        connection.close() 
+    
     try:
-       create_page_revisions(p, mw_p, parsed)
+        create_page_revisions(p, mw_p, parsed)
     except KeyError:
-       # For some reason the response lacks a revisions key
-       # TODO: figure out why
-       pass
+        # For some reason the response lacks a revisions key
+        # TODO: figure out why
+        pass
     process_page_categories(p, parsed['categories'])
 
 
@@ -1340,7 +1350,7 @@ def import_pages():
     print "Getting master page list ..."
     get_robot_user() # so threads won't try to create one concurrently
     pages = get_page_list()
-    process_concurrently(pages, import_page, num_workers=4, name='pages')
+    process_concurrently(pages, import_page, num_workers=1, name='pages')
 
 
 def process_page_categories(page, categories):
@@ -1358,6 +1368,62 @@ def process_page_categories(page, categories):
     if keys:
         pagetagset = PageTagSet.objects.create(page=page)
         pagetagset.tags = keys
+
+
+def find_non_googlemaps_coordinates(html_frag):
+    """
+    Sometimes geolocation coordinates are embedded in a page in strange ways.
+    Here are two examples:
+        Wiki text: {{Coordinates|lat=42.961393|lon=85.657278}}
+        HTML: Geographic coordinates are <span class="smwttinline">42.961393°N, 85.657278°W<span class="smwttcontent">Latitude: 42°57′41.015″N<br />Longitude: 85°39′26.201″W</span></span>.
+              
+        Wiki text: [[Coordinates:=42.960922° N, 85.66835° W]]
+        HTML: [[address:=101 South <a href="/Division_Avenue" title="Division Avenue">Division</a>]] is located in the <a href="/Heartside-Downtown" title="Heartside-Downtown">Heartside-Downtown</a> neighborhood. Geographic coordinates are <span class="smwttinline">42.960922° N, 85.66835° W<span class="smwttcontent">Latitude: 42°57′39.319″N<br />Longitude: 85°40′6.06″W</span></span>.
+    We process those here.
+    """
+    #with codecs.open(pagename+".txt", "w", "utf-8-sig") as f:
+    #    f.write(html)
+    pattern = r'Geographic coordinates are <span class="smwttinline">([1-9]\d*(\.\d+)?).[ ]?N, ([1-9]\d*(\.\d+)?).[ ]?W<span class="smwttcontent">'
+    match = re.search(pattern, html_frag)
+    if match:
+        lat = match.group(1)
+        lon = '-'+match.group(3)
+        return {'lat': lat, 'lon': lon}
+    
+
+def post_process_mapdata():
+    """ A management command that looks at all the imported pages and finds 
+        coordinates to turn into real mapdata. This should be run after a
+        successful mediawiki import.
+    """
+    import codecs #Only used during debugging
+    from django.contrib.gis.geos import Point, MultiPoint
+    from maps.models import MapData
+    from pages.models import Page
+    
+    for p in Page.objects.all():
+        print 'Looking for mapdata in', p.name
+        coord = find_non_googlemaps_coordinates(p.content)
+        if coord:
+            print "Adding mapdata for", p.name
+            mapdata = MapData.objects.filter(page=p)
+            y = float(coord['lat'])
+            x = float(coord['lon'])
+            point = Point(x, y)
+            if mapdata:
+                m = mapdata[0]
+                points = m.points
+                points.append(point)
+                m.points = points
+            else:
+                points = MultiPoint(point)
+                m = MapData(page=p, points=points)
+            try:
+                m.save()
+            except IntegrityError:
+                connection.close()
+            except ValueError:
+                print "Bad value in mapdata"
 
 
 def clear_out_existing_data():
@@ -1428,9 +1494,9 @@ def run():
     import_pages()
     print "Importing redirects..."
     import_redirects()
-    if _maps_installed:
-        print "Processing map data..."
-        process_mapdata()
+    #if _maps_installed:
+    #    print "Processing map data..."
+    #    process_mapdata()
     print "Import completed in %.2f minutes" % ((time.time() - start) / 60.0)
 
 if __name__ == '__main__':
