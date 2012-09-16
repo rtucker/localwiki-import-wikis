@@ -1,10 +1,10 @@
 from setuptools import setup, find_packages
 setup(
     name = "localwiki-importers",
-    version = "0.1",
-    author='Mike Ivanov',
-    author_email='mivanov@gmail.com',
-    url='http://localwiki.org',
+    version = "0.2",
+    author='Philip Neustrom',
+    author_email='philipn@gmail.com',
+    url='http://github.com/philipn/localwiki-importers',
     packages = find_packages(),
     install_requires=[
         'mediawikitools==1.2.0',

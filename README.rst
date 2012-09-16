@@ -2,21 +2,28 @@ These are scripts to import legacy wiki engines (MediaWiki, Sycamore / WikiSpot.
 
 Very rough right now. Please tell us about your experiences on #localwiki on Freenode.
 
+Usage
+-----
+
 To import pages from an existing MediaWiki site into LocalWiki, do the following:
 
-1. Activate the virtualenv used for LocalWiki (typical path shown):
+1. Activate the virtualenv used for LocalWiki (typical path shown)::
+
    $ source /usr/share/localwiki/env/bin/activate
 
-2. Install the localwiki-importers package:
-   (env)$ python setup.py install
+2. Install the localwiki-importers package::
 
-3. Add 'importers' to LOCAL_INSTALLED_APPS in /usr/share/localwiki/conf/localsettings.py:
-   LOCAL_INSTALLED_APPS = ('importers',)
+   (env)$ pip install localwiki-importers
 
-4. Now you can run the import command like this:
+3. Add 'localwiki_importers' to LOCAL_INSTALLED_APPS in /usr/share/localwiki/conf/localsettings.py::
+
+   LOCAL_INSTALLED_APPS = ('localwiki_importers',)
+
+4. Now you can run the import command like this::
+
    $ localwiki-manage import_mediawiki
 
-Follow the prompts to complete the import.
+Follow the prompts to complete the import!
 
 ------------
 

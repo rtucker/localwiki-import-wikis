@@ -1,9 +1,6 @@
 # coding=utf-8
-
 import os
-import site
 import sys
-
 
 if "DJANGO_SETTINGS_MODULE" not in os.environ:
     print "This importer must be run from the manage.py script"
@@ -26,7 +23,6 @@ from mediawikitools import *
 from django.db import transaction
 from django.db import IntegrityError, connection
 from pages.plugins import unquote_url
-from django.db.utils import IntegrityError
 
 
 _maps_installed = False
@@ -64,7 +60,8 @@ def set_script_path(path):
 
 
 def process_concurrently(work_items, work_func, num_workers=1, name='items'):
-    """ Apply a function to all work items using a number of concurrent workers
+    """
+    Apply a function to all work items using a number of concurrent workers
     """
     from Queue import Queue
     from threading import Thread
@@ -156,8 +153,10 @@ def fix_pagename(name):
 
 
 def import_redirect(from_pagename):
-    # We create the Redirects here.  We don't try and port over the
-    # version information for the formerly-page-text-based redirects.
+    """
+    We create the Redirects here.  We don't try and port over the
+    version information for the formerly-page-text-based redirects.
+    """
     to_pagename = parse_redirect(from_pagename)
     if to_pagename is None:
         print "Error creating redirect: %s has no link" % from_pagename
@@ -196,8 +195,10 @@ def import_redirects():
 
 
 def process_mapdata():
-    # We create the MapData models here.  We can't create them until the
-    # Page objects are created.
+    """
+    We create the MapData models here.  We can't create them until the
+    Page objects are created.
+    """
     global mapdata_objects_to_create
 
     from maps.models import MapData
@@ -769,6 +770,10 @@ def process_non_html_elements(html, pagename):
 
 def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
                    border=True):
+    """
+    Take the mediawiki image HTML and turn it into our type of image
+    reference.
+    """
     # Images start with something like this:
     # <a href="/mediawiki-1.16.0/index.php/File:1009-Packard.jpg"><img
     for elem in tree:
@@ -879,7 +884,10 @@ def fix_image_html(mw_img_title, quoted_mw_img_title, filename, tree,
 
 
 def page_url_to_name(page_url):
-    # Some wikis use pretty urls and some use ?title=
+    """
+    Some wikis use pretty urls and soem use ?title=.
+    Try to fix that here.
+    """
     if '?title=' in page_url:
         return page_url.split('?title=')[1]
     return urlsplit(page_url).path.split('/')[-1]
