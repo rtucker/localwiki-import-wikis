@@ -13,11 +13,11 @@ To import pages from an existing MediaWiki site into LocalWiki, do the following
 
 2. Install the localwiki-importers package::
 
-   (env)$ pip install localwiki-importers
+   (env)$ pip install localwiki-import-wikis
 
 3. Add 'localwiki_importers' to LOCAL_INSTALLED_APPS in /usr/share/localwiki/conf/localsettings.py::
 
-   LOCAL_INSTALLED_APPS = ('localwiki_importers',)
+   LOCAL_INSTALLED_APPS = ('import_wikis',)
 
 4. Now you can run the import command like this::
 
