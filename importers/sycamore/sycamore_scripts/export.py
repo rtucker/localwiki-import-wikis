@@ -585,7 +585,7 @@ def map(request, file):
 
     end_map(request, file)
 
-def export(request, wiki_name=None, just_files=False, exclude_files=False):
+def export(request, wiki_name=None, just_pages=False, just_files=False, just_maps=False):
     """
     We do this in chunks because loading an entire wiki into memory
     is kinda a bad idea.
@@ -594,10 +594,14 @@ def export(request, wiki_name=None, just_files=False, exclude_files=False):
         # TODO: full export
         return
 
+    file_tail = ''
     if just_files:
-       f = open('%s.%s.files.wiki.xml' % (wiki_name, time.time()), 'w')
-    else:
-        f = open('%s.%s.wiki.xml' % (wiki_name, time.time()), 'w')
+        file_tail = '.files'
+    elif just_pages:
+        file_tail = '.pages'
+    elif just_maps:
+        file_tail = '.maps'
+    f = open('%s.%s%s.wiki.xml' % (wiki_name, time.time(), file_tail), 'w')
 
     xml_header = ('<?xml version="1.0" encoding="UTF-8"?>\n'
                   '<sycamore>\n')
@@ -605,18 +609,21 @@ def export(request, wiki_name=None, just_files=False, exclude_files=False):
     f.write(xml_header)
 
     start_wiki(request, f)
+    wiki_settings(request, f)
 
-    if not just_files:
-       wiki_settings(request, f)
+    if just_pages:
        pages(request, f)
-
-    if not exclude_files:
+    elif just_files:
        files(request, f)
-
-    if not just_files:
-       events(request, f)
-       security(request, f)
+    elif just_maps:
        map(request, f)
+    else:
+       pages(request, f)
+       files(request, f)
+       map(request, f)
+       
+    events(request, f)
+    security(request, f)
 
     end_wiki(request, f)
     f.write(xml_footer)
@@ -626,12 +633,15 @@ if __name__ == '__main__':
     command_line = True
 
     just_files = False
-    exclude_files = False
+    just_pages = False
+    just_maps = False
     if len(sys.argv) > 1:
        if sys.argv[1] == '--just_files':
          just_files = True
-       elif sys.argv[1] == '--exclude_files':
-         exclude_files = True
+       elif sys.argv[1] == '--just_pages':
+         just_pages = True
+       elif sys.argv[1] == '--just_maps':
+         just_maps = True
 
     sys.stdout.write("Enter the wiki shortname: ")
     wiki_name = raw_input().strip().lower()
@@ -646,5 +656,5 @@ if __name__ == '__main__':
         command_line = False
         request.user = user.User(req)
 
-    export(req, wiki_name=wiki_name, just_files=just_files, exclude_files=exclude_files)
+    export(req, wiki_name=wiki_name, just_pages=just_pages, just_files=just_files, just_maps=just_maps)
     req.db_disconnect()
