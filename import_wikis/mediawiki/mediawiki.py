@@ -59,7 +59,7 @@ def set_script_path(path):
     SCRIPT_PATH = path
 
 
-def process_concurrently(work_items, work_func, num_workers=1, name='items'):
+def process_concurrently(work_items, work_func, num_workers=4, name='items'):
     """
     Apply a function to all work items using a number of concurrent workers
     """
@@ -76,9 +76,10 @@ def process_concurrently(work_items, work_func, num_workers=1, name='items'):
     def worker():
         while True:
             items_left = q.qsize()
-            progress = 100 * (num_items - items_left) / num_items
-            print "%d %s left to process (%d%% done)" % (items_left, name,
-                                                         progress)
+            if num_items:
+                progress = 100 * (num_items - items_left) / num_items
+                print "%d %s left to process (%d%% done)" % (items_left, name,
+                                                             progress)
             item = q.get()
             try:
                 work_func(item)
@@ -191,7 +192,7 @@ def import_redirect(from_pagename):
 def import_redirects():
     redirects = [mw_p.title for mw_p in get_redirects()]
     process_concurrently(redirects, import_redirect,
-                         num_workers=1, name='redirects')
+                         num_workers=4, name='redirects')
 
 
 def process_mapdata():
@@ -1356,7 +1357,7 @@ def import_pages():
     print "Getting master page list ..."
     get_robot_user()  # so threads won't try to create one concurrently
     pages = get_page_list()
-    process_concurrently(pages, import_page, num_workers=1, name='pages')
+    process_concurrently(pages, import_page, num_workers=4, name='pages')
 
 
 def process_page_categories(page, categories):
@@ -1397,7 +1398,7 @@ def find_non_googlemaps_coordinates(html_frag):
         return {'lat': lat, 'lon': lon}
 
 
-def post_process_mapdata():
+def find_more_mapdata():
     """
     A management command that looks at all the imported pages and finds
     coordinates to turn into real mapdata. This should be run after a
@@ -1437,39 +1438,49 @@ def clear_out_existing_data():
     A utility function that clears out existing pages, users, files,
     etc before running the import.
     """
-    from pages.models import Page, PageFile
-    from redirects.models import Redirect
-    from tags.models import Tag, PageTagSet
+    from django.db import connection
+    from django.contrib.auth.models import User
+    #for p in User.objects.all():
+    #    p.delete()
+    cursor = connection.cursor()
+    print 'Bulk clearing out all map data'
+    cursor.execute('DELETE from maps_mapdata')
+    print 'All map data deleted'
+    print 'Bulk clearing out all map history'
+    cursor.execute('DELETE from maps_mapdata_hist')
+    print 'All map history deleted'
 
-    for p in Page.objects.all():
-        print 'Clearing out', p
-        p.delete(track_changes=False)
-        for p_h in p.versions.all():
-            p_h.delete()
+    print 'Bulk clearing out all tag data'
+    cursor.execute('DELETE from tags_pagetagset')
+    cursor.execute('DELETE from tags_pagetagset_tags')
+    cursor.execute('DELETE from tags_tag')
+    print 'All tag data deleted'
+    print 'Bulk clearing out all tag history'
+    cursor.execute('DELETE from tags_pagetagset_hist')
+    cursor.execute('DELETE from tags_pagetagset_hist_tags')
+    cursor.execute('DELETE from tags_tag_hist')
+    print 'All tag history deleted'
 
-    for f in PageFile.objects.all():
-        print 'Clearing out', f
-        f.delete(track_changes=False)
-        for f_h in f.versions.all():
-            f_h.delete()
+    print 'Bulk clearing out all file data'
+    cursor.execute('DELETE from pages_pagefile')
+    print 'All file data deleted'
+    print 'Bulk clearing out all file history'
+    cursor.execute('DELETE from pages_pagefile_hist')
+    print 'All file history deleted'
 
-    for r in Redirect.objects.all():
-        print 'Clearing out', r
-        r.delete(track_changes=False)
-        for r_h in r.versions.all():
-            r_h.delete()
+    print 'Bulk clearing out all redirect data'
+    cursor.execute('DELETE from redirects_redirect')
+    print 'All redirect data deleted'
+    print 'Bulk clearing out all redirect history'
+    cursor.execute('DELETE from redirects_redirect_hist')
+    print 'All redirect history deleted'
 
-    for p in PageTagSet.objects.all():
-        print 'Clearing out', p
-        p.delete(track_changes=False)
-        for p_h in p.versions.all():
-            p_h.delete()
-
-    for t in Tag.objects.all():
-        print 'Clearing out', t
-        t.delete(track_changes=False)
-        for t_h in t.versions.all():
-            t_h.delete()
+    print 'Bulk clearing out all page data'
+    cursor.execute('DELETE from pages_page')
+    print 'All page data deleted'
+    print 'Bulk clearing out all page history'
+    cursor.execute('DELETE from pages_page_hist')
+    print 'All page history deleted'
 
 
 def run():
@@ -1500,9 +1511,9 @@ def run():
     import_pages()
     print "Importing redirects..."
     import_redirects()
-    #if _maps_installed:
-    #    print "Processing map data..."
-    #    process_mapdata()
+    if _maps_installed:
+        print "Processing map data..."
+        process_mapdata()
     print "Import completed in %.2f minutes" % ((time.time() - start) / 60.0)
 
 if __name__ == '__main__':

@@ -6,5 +6,5 @@ class Command(BaseCommand):
             'Clears out any existing data.')
 
     def handle(self, *args, **options):
-        from importers import mediawiki
+        from import_wikis import mediawiki
         mediawiki.run()

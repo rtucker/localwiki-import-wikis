@@ -8,7 +8,7 @@ import sapling
 site.addsitedir(os.path.abspath(os.path.split(sapling.__file__)[0]))
 os.environ["DJANGO_SETTINGS_MODULE"] = "sapling.settings"
 
-from importers import mediawiki
+from import_wikis import mediawiki
 
 
 def _convert_to_string(l):
