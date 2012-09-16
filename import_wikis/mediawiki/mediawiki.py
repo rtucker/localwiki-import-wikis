@@ -1,6 +1,7 @@
 # coding=utf-8
 import os
 import sys
+import time
 
 if "DJANGO_SETTINGS_MODULE" not in os.environ:
     print "This importer must be run from the manage.py script"
@@ -9,6 +10,8 @@ if "DJANGO_SETTINGS_MODULE" not in os.environ:
 import time
 import hashlib
 import html5lib
+import threading
+from collections import defaultdict
 from lxml import etree
 
 _treebuilder = html5lib.treebuilders.getTreeBuilder("lxml")
@@ -60,10 +63,47 @@ def set_script_path(path):
     SCRIPT_PATH = path
 
 
+# In general, we want only one thread at a time to write information
+# about a particular page. Checking for page existence, etc is best done
+# in isolation.
+page_lookup_lock_db = defaultdict(threading.Lock)
+page_lookup_lock = threading.Lock()
+
+
 def process_concurrently(work_items, work_func, num_workers=4, name='items'):
     """
     Apply a function to all work items using a number of concurrent workers
     """
+    def worker():
+        from django.db import close_connection, connection
+        close_connection()
+        connection.connection = None
+        while True:
+            items_left = q.qsize()
+            if num_items and items_left:
+                progress = 100 * (num_items - items_left) / items_left
+                print "%d %s left to process (%d%% done)" % (
+                    items_left, name, progress)
+            try:
+                item = q.get()
+                work_func(item)
+            except:
+                from django.db import close_connection, connection
+                close_connection()
+                connection.connection = None
+                try:
+                    # try again..
+                    time.sleep(5)
+                    work_func(item)
+                except:
+                    from django.db import close_connection, connection
+                    close_connection()
+                    connection.connection = None
+
+                    traceback.print_exc()
+                    print "Unable to process %s" % item
+            q.task_done()
+
     from Queue import Queue
     from threading import Thread
     import traceback
@@ -73,40 +113,6 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
         q.put(item)
 
     num_items = q.qsize()
-
-    def worker():
-        from django.db import close_connection, connection
-        close_connection()
-        connection.connection = None
-        while True:
-            
-
-            try:
-               items_left = q.qsize()
-               if num_items:
-                   progress = 100 * (num_items - items_left) / num_items
-                   print "%d %s left to process (%d%% done)" % (items_left, name,
-                                                                progress)
-               item = q.get()
-               try:
-                   work_func(item)
-               except:
-                   traceback.print_exc()
-                   "Unable to process %s" % item
-               q.task_done()
-            except:
-                from django.db import close_connection, connection
-                close_connection()
-                connection.connection = None
-
-                try:
-                    # try again..
-                    work_func(item)
-                except:
-		    from django.db import close_connection, connection
-                    close_connection()
-                    connection.connection = None
-
     for i in range(num_workers):
         t = Thread(target=worker)
         t.daemon = True
@@ -124,9 +130,9 @@ def get_robot_user():
         u = User(name='LocalWiki Robot', username='LocalWikiRobot',
                  email='editrobot@localwiki.org')
         try:
-          u.save()
+            u.save()
         except IntegrityError:
-          pass  # another thread beat us
+            pass  # another thread beat us
     return u
 
 
@@ -166,11 +172,11 @@ def fix_pagename(name):
         return "Users/" + name[10:] + "/Talk"
     if name.startswith('Category:'):
         # For now, let's just throw these into the main
-        # namespace.  TODO: Convert to tags.
+        # namespace.
         return name[9:]
     if name.startswith('Category talk:'):
         # For now, let's just throw these into the main
-        # namespace.  TODO: Convert to tags.
+        # namespace.
         return name[14:] + "/Talk"
     return name
 
@@ -661,10 +667,21 @@ def fix_googlemaps(tree, pagename, save_data=True):
         if img is None:
             return
         src = img.attrib.get('src')
-        center = parse_qs(urlparse(src).query)['center']
-        lat, lon = center[0].split(',')
-        d = {'pagename': pagename, 'lat': lat, 'lon': lon}
-        mapdata_objects_to_create.append(d)
+        qs = parse_qs(urlparse(src).query)
+        if qs.get('markers'):
+            markers = qs['markers'][0].split('|')
+            for marker in markers:
+                if not marker.strip():
+                        continue
+                lat, lon, color = marker.split(',')
+                d = {'pagename': pagename, 'lat': lat, 'lon': lon}
+                mapdata_objects_to_create.append(d)
+        else:
+            # Use the map center as the point
+            center = qs['center']
+            lat, lon = center.split(',')
+            d = {'pagename': pagename, 'lat': lat, 'lon': lon}
+            mapdata_objects_to_create.append(d)
 
     for elem in tree:
         if elem is None or isinstance(elem, basestring):
@@ -1378,6 +1395,20 @@ def get_redirects():
     return get_page_list(apfilterredir='redirects')
 
 
+def page_lock(f):
+    def new_f(mw_p):
+        from pages.models import slugify
+        global page_lookup_lock, page_lookup_lock_db
+        page_lookup_lock.acquire()
+        page_lock = page_lookup_lock_db[slugify(mw_p.title)]
+        page_lookup_lock.release()
+        page_lock.acquire()
+        f(mw_p)
+        page_lock.release()
+    return new_f
+
+
+@page_lock
 def import_page(mw_p):
     from pages.models import Page, slugify
     print "Importing %s" % mw_p.title.encode('utf-8')
