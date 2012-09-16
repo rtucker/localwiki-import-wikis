@@ -25,6 +25,10 @@ To import pages from an existing MediaWiki site into LocalWiki, do the following
 
 Follow the prompts to complete the import!
 
+5. Build the search index::
+
+   $ localwiki-manage rebuild_index
+
 ------------
 
 Copyright (c) 2012 Philip Neustrom <philipn@gmail.com>

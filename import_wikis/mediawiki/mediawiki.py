@@ -22,6 +22,7 @@ from mediawikitools import *
 
 from django.db import transaction
 from django.db import IntegrityError, connection
+from haystack import site as haystack_site
 from pages.plugins import unquote_url
 
 
@@ -1543,6 +1544,11 @@ def clear_out_existing_data():
     print 'All page history deleted'
 
 
+def turn_off_search():
+    from pages.models import Page
+    haystack_site.unregister(Page)
+
+
 def run():
     global site, SCRIPT_PATH
 
@@ -1560,6 +1566,7 @@ def run():
     if yes_no.lower() != "yes":
         sys.exit()
 
+    turn_off_search()
     print "Clearing out existing data..."
     with transaction.commit_on_success():
         clear_out_existing_data()
