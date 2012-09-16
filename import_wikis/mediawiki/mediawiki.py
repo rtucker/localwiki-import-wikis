@@ -897,7 +897,7 @@ def page_url_to_name(page_url):
 def get_image_info(image_title):
     params = {'action': 'query',
               'prop': 'imageinfo',
-              'imlimit': 500,
+              'iilimit': 500,
               'titles': image_title,
               'iiprop': 'timestamp|user|url|dimensions|comment',
               }
@@ -906,7 +906,7 @@ def get_image_info(image_title):
     info_by_pageid = response['query']['pages']
     # Doesn't matter what page it's on, we just want the info.
     info = info_by_pageid[info_by_pageid.keys()[0]]
-    return info['imageinfo'][0]
+    return info['imageinfo']
 
 
 def grab_images(tree, page_id, pagename, attach_to_pagename=None,
@@ -915,6 +915,65 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
     Imports the images on a page as PageFile objects and fixes the page's
     HTML to be what we want for images.
     """
+    def _get_image_binary(image_url):
+            # Get the full-size image binary and store it in a string.
+            img_ptr = urllib.URLopener()
+            img_tmp_f = open(img_ptr.retrieve(image_url)[0], 'r')
+            file_content = ContentFile(img_tmp_f.read())
+            img_tmp_f.close()
+            img_ptr.close()
+            return file_content
+
+    def _create_image_revisions(pfile, image_info, filename, attach_to_pagename):
+        from django.contrib.auth.models import User
+
+        rev_num = 0
+        total_revs = len(image_info)
+        for revision in image_info:
+            image_url = revision['url']
+
+            rev_num += 1
+            if rev_num == total_revs:
+                history_type = 0  # Added
+            else:
+                history_type = 1  # Updated
+
+            history_comment = revision.get('comment', None)
+            if history_comment:
+                history_comment = history_comment[:200]
+
+            username = revision.get('user', None)
+            user = User.objects.filter(username=username)
+            if user:
+                user = user[0]
+                history_user_id = user.id
+            else:
+                history_user_id = None
+            history_user_ip = None  # MW offers no way to get this via API
+
+            timestamp = revision.get('timestamp', None)
+            history_date = date_parse(timestamp)
+
+            print "Creating historical image %s on page %s" % (
+                filename.encode('utf-8'), attach_to_pagename.encode('utf-8'))
+
+            # Create the historical PageFile and associate it with the current page.
+            pfile_h = PageFile.versions.model(
+                id=pfile.id,
+                name=filename,
+                slug=slugify(attach_to_pagename),
+                history_comment=history_comment,
+                history_date=history_date,
+                history_type=history_type,
+                history_user_id=history_user_id,
+                history_user_ip=history_user_ip
+            )
+
+            file_content = _get_image_binary(image_url)
+            # Attach the image binary
+            pfile_h.file.save(filename, file_content, save=False)
+            pfile_h.save()
+
     from django.core.files.base import ContentFile
     from pages.models import slugify, PageFile
 
@@ -947,8 +1006,9 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
             # For some reason we can't get the image info.
             # TODO: Investigate this.
             continue
-        image_url = image_info['url']
-        image_description_url = image_info['descriptionurl']
+
+        image_url = image_info[0]['url']
+        image_description_url = image_info[0]['descriptionurl']
 
         quoted_image_title = page_url_to_name(image_description_url)
         attach_to_pagename = attach_to_pagename or pagename
@@ -968,19 +1028,14 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
             # the PageFile.
             continue
 
-        # Get the full-size image binary and store it in a string.
-        img_ptr = urllib.URLopener()
-        img_tmp_f = open(img_ptr.retrieve(image_url)[0], 'r')
-        file_content = ContentFile(img_tmp_f.read())
-        img_tmp_f.close()
-        img_ptr.close()
-
         # Create the PageFile and associate it with the current page.
         print "Creating image %s on page %s" % (filename.encode('utf-8'), pagename.encode('utf-8'))
         try:
+            file_content = _get_image_binary(image_url)
             pfile = PageFile(name=filename, slug=slugify(attach_to_pagename))
             pfile.file.save(filename, file_content, save=False)
-            pfile.save(user=robot, comment="Automated edit. Creating file.")
+            pfile.save(track_changes=False)
+            _create_image_revisions(pfile, image_info, filename, attach_to_pagename)
         except IntegrityError:
             connection.close()
 
@@ -1373,7 +1428,8 @@ def process_page_categories(page, categories):
         except IntegrityError as e:
             pass
     if keys:
-        pagetagset = PageTagSet.objects.create(page=page)
+        pagetagset = PageTagSet(page=page)
+        pagetagset.save(user=get_robot_user())
         pagetagset.tags = keys
 
 
