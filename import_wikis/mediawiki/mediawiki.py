@@ -678,7 +678,7 @@ def fix_googlemaps(tree, pagename, save_data=True):
                 mapdata_objects_to_create.append(d)
         else:
             # Use the map center as the point
-            center = qs['center']
+            center = qs['center'][0]
             lat, lon = center.split(',')
             d = {'pagename': pagename, 'lat': lat, 'lon': lon}
             mapdata_objects_to_create.append(d)
