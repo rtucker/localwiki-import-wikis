@@ -59,6 +59,19 @@ class TestHTMLNormalization(unittest.TestCase):
         html = """<a href="%(SCRIPT_PATH)s/Ypsilanti" title="Ypsilanti" class="mw-redirect">Ypsilanti</a>""" % self.env
         expected_html = """<a href="Ypsilanti">Ypsilanti</a>"""
 
+    def test_external_links(self):
+        # Make sure we preserve external links.
+
+        html = """<p>Some text here</p>
+<p>And now a link: <a href="http://example.org/testing/?hi=1&what=there">Waverly Road</a> woo!</p>""" % self.env
+        expected_html = """<p>Some text here</p>
+<p>And now a link: <a href="http://example.org/testing/?hi=1&what=there">Waverly Road</a> woo!</p>""" % self.env
+        self.assertTrue(is_html_equal(mediawiki.process_html(html), expected_html))
+
+        html = """<p><a href="http://news.google.com/newspapers?id=eCVbAAAAIBAJ&amp;sjid=ZU8NAAAAIBAJ&amp;pg=3926%2C4841530" class="external text">Ann Arbor Argus</a>, Feb. 27, 1891.</p>"""
+        expected_html = """<p><a href="http://news.google.com/newspapers?id=eCVbAAAAIBAJ&amp;sjid=ZU8NAAAAIBAJ&amp;pg=3926%2C4841530" class="external text">Ann Arbor Argus</a>, Feb. 27, 1891.</p>"""
+        self.assertTrue(is_html_equal(mediawiki.process_html(html), expected_html))
+
     def test_fix_i_b_tags(self):
         html = """<p>Some <i>text <b>here</b></i></p><p>and <i>then</i> <b>some</b> more</p>"""
         expected_html = """<p>Some <em>text <strong>here</strong></em></p><p>and <em>then</em> <strong>some</strong> more</p>"""

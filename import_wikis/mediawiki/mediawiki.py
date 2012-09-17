@@ -80,8 +80,8 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
         connection.connection = None
         while True:
             items_left = q.qsize()
-            if num_items and items_left:
-                progress = 100 * (num_items - items_left) / items_left
+            if num_items:
+                progress = 100 * ((num_items - items_left) / num_items)
                 print "%d %s left to process (%d%% done)" % (
                     items_left, name, progress)
             try:
@@ -1488,6 +1488,12 @@ def process_page_categories(page, categories):
         pagetagset = PageTagSet(page=page)
         pagetagset.save(user=get_robot_user())
         pagetagset.tags = keys
+
+        # Edit PageTagSet history and the current version to the time the page
+        # was most recently edited to avoid spamming Recent Changes.
+        pts_h = pagetagset.versions.most_recent()
+        pts_h.history_date = page.versions.most_recent().version_info.date
+        pts_h.save()
 
 
 def find_non_googlemaps_coordinates(html_frag):
