@@ -1,0 +1,20 @@
+<VirtualHost *:80>
+    # .. usual stuff up here ..
+
+    # Transform urls, a'la:
+    # /wiki/My_page --> /My_page
+    # /wiki/Category:My_page --> /My_page
+    # /wiki/User:My_user --> /User/My_page
+    # /wiki/Talk:My_page --> /My_page/Talk
+
+    RewriteEngine On
+    # old mediawiki URLs
+    RewriteRule ^/index.php/(.*)$ http://arborwiki-new.org/$1 [R=301]
+    RewriteRule ^/wiki/Category:(.*)$ http://arborwiki-new.org/$1 [R=301]
+    RewriteRule ^/wiki/Talk:(.*?)/{0,1}$ http://arborwiki-new.org/$1/Talk [R=301]
+    RewriteRule ^/wiki/User:(.*)$ http://arborwiki-new.org/User/$1 [R=301]
+    RewriteRule ^/wiki/(.*)$ http://arborwiki-new.org/$1 [R=301]
+
+    # .. usual stuff down here ..
+
+</VirtualHost>
