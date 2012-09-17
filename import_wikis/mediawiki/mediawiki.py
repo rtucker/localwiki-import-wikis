@@ -81,7 +81,7 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
         while True:
             items_left = q.qsize()
             if num_items:
-                progress = 100 * ((num_items - items_left) / num_items)
+                progress = 100 * ((num_items - items_left) / num_items * 1.0)
                 print "%d %s left to process (%d%% done)" % (
                     items_left, name, progress)
             try:
@@ -113,6 +113,7 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
         q.put(item)
 
     num_items = q.qsize()
+
     for i in range(num_workers):
         t = Thread(target=worker)
         t.daemon = True
