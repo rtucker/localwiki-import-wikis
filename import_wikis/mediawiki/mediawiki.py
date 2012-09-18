@@ -1,7 +1,6 @@
 # coding=utf-8
 import os
 import sys
-import time
 
 if "DJANGO_SETTINGS_MODULE" not in os.environ:
     print "This importer must be run from the manage.py script"
@@ -42,7 +41,7 @@ except ImportError:
 site = None
 SCRIPT_PATH = None
 include_pages_to_create = []
-mapdata_objects_to_create = []
+mapdata_objects_to_create = defaultdict(list)
 
 
 def guess_api_endpoint(url):
@@ -273,11 +272,10 @@ def process_mapdata():
     from pages.models import Page, slugify
     from django.contrib.gis.geos import Point, MultiPoint
 
-    for item in mapdata_objects_to_create:
-        page_name = item['pagename'].encode('utf-8')
-        print "Adding mapdata for", page_name
+    for page_name, coords in mapdata_objects_to_create.iteritems():
+        print "Adding mapdata for", page_name.encode('utf-8')
         try:
-            p = Page.objects.get(slug=slugify(item['pagename']))
+            p = Page.objects.get(slug=slugify(page_name))
         except Page.DoesNotExist:
             print "*** Warning *** Skipping mapdata for page", page_name
             print ("    Found mapdata for the page on mediawiki site, but "
@@ -285,23 +283,33 @@ def process_mapdata():
             continue
 
         mapdata = MapData.objects.filter(page=p)
-        y = float(item['lat'])
-        x = float(item['lon'])
-        point = Point(x, y)
         if mapdata:
             m = mapdata[0]
-            points = m.points
-            points.append(point)
-            m.points = points
         else:
-            points = MultiPoint(point)
-            m = MapData(page=p, points=points)
+            m = MapData(page=p)
+
+        for lat, lon in coords:
+            y = float(lat)
+            x = float(lon)
+            point = Point(x, y)
+
+            if m.points:
+                m.points.append(point)
+            else:
+                m.points = MultiPoint(point)
+
         try:
             m.save()
         except IntegrityError:
             connection.close()
         except ValueError:
             print "Bad value in mapdata"
+
+        # Edit MapData history and set the current version to the time the page
+        # was most recently edited to avoid spamming Recent Changes.
+        m_h = m.versions.most_recent()
+        m_h.history_date = p.versions.most_recent().version_info.date
+        m_h.save()
 
 
 def parse_page(page_name):
@@ -713,14 +721,12 @@ def fix_googlemaps(tree, pagename, save_data=True):
                 if not marker.strip():
                         continue
                 lat, lon, color = marker.split(',')
-                d = {'pagename': pagename, 'lat': lat, 'lon': lon}
-                mapdata_objects_to_create.append(d)
+                mapdata_objects_to_create[pagename].append((lat, lon))
         else:
             # Use the map center as the point
             center = qs['center'][0]
             lat, lon = center.split(',')
-            d = {'pagename': pagename, 'lat': lat, 'lon': lon}
-            mapdata_objects_to_create.append(d)
+            mapdata_objects_to_create[pagename].append((lat, lon))
 
     for elem in tree:
         if elem is None or isinstance(elem, basestring):
@@ -838,8 +844,7 @@ def process_non_html_elements(html, pagename):
         lon = elem.getAttribute('lon')
         lat = elem.getAttribute('lat')
 
-        d = {'pagename': pagename, 'lat': lat, 'lon': lon}
-        mapdata_objects_to_create.append(d)
+        mapdata_objects_to_create[pagename].append((lat, lon))
 
         return ''  # Clear out the googlemap tag nonsense.
 
