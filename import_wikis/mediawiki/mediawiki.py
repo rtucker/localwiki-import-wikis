@@ -8,8 +8,10 @@ if "DJANGO_SETTINGS_MODULE" not in os.environ:
     sys.exit(1)
 
 import time
+from progress.bar import Bar
 import hashlib
 import html5lib
+import csv
 import threading
 from collections import defaultdict
 from lxml import etree
@@ -79,11 +81,6 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
         close_connection()
         connection.connection = None
         while True:
-            items_left = q.qsize()
-            if num_items:
-                progress = 100 * ((num_items - items_left) / num_items * 1.0)
-                print "%d %s left to process (%d%% done)" % (
-                    items_left, name, progress)
             try:
                 item = q.get()
                 work_func(item)
@@ -103,6 +100,8 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
                     traceback.print_exc()
                     print "Unable to process %s" % item
             q.task_done()
+            progress_bar.next()
+            print ""
 
     from Queue import Queue
     from threading import Thread
@@ -113,6 +112,7 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
         q.put(item)
 
     num_items = q.qsize()
+    progress_bar = Bar('Progress', max=num_items)
 
     for i in range(num_workers):
         t = Thread(target=worker)
@@ -120,6 +120,7 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
         t.start()
     # wait for all workers to finish
     q.join()
+    progress_bar.finish()
 
 
 def get_robot_user():
@@ -137,6 +138,14 @@ def get_robot_user():
     return u
 
 
+def normalize_username(username):
+    """
+    MediaWiki allows usernames with spaces in them, which is pretty weird.
+    """
+    max_length = 30
+    return username[:max_length].replace(' ', '')
+
+
 def import_users():
     from django.contrib.auth.models import User
 
@@ -144,24 +153,53 @@ def import_users():
         'action': 'query',
         'list': 'allusers',
         'aulimit': 500,
+        'auprop': 'registration',
     })
     for item in request.query()['query']['allusers']:
-        username = item['name'][:30]
+        username = item['name']
+        date_joined = item.get('registration', '').strip()
+        if date_joined:
+            date_joined = date_parse(date_joined)
 
-        # TODO: how do we get their email address here? I don't think
-        # it's available via the API. Maybe we'll have to fill in the
-        # users' emails in a separate step.
         # We require users to have an email address, so we fill this in with a
         # dummy value for now.
         name_hash = hashlib.sha1(username.encode('utf-8')).hexdigest()
         email = "%s@FIXME.localwiki.org" % name_hash
 
-        if User.objects.filter(username=username).exists():
+        if User.objects.filter(username=normalize_username(username)).exists():
             continue
 
-        print "Importing user %s" % username.encode('utf-8')
-        u = User(username=username, email=email)
+        print "Importing user %s as %s" % (
+            username.encode('utf-8'),
+            normalize_username(username).encode('utf-8'))
+
+        user_args = {
+            'username': normalize_username(username),
+            'email': email,
+            'name': username
+        }
+
+        if date_joined:
+            user_args['date_joined'] = date_joined
+
+        u = User(**user_args)
         u.save()
+
+
+def set_user_emails_from_csv(csv_location):
+    """
+    Import users' email addresses from provided CSV.
+    """
+    with open(csv_location) as csvfile:
+        reader = csv.reader(csvfile)
+        for item in reader:
+            username, email = item[0], item[1]
+            user = User.objects.get_or_create(
+                username=normalize_username(username))
+            if not user.name:
+                user.name = username
+            user.email = email
+            user.save()
 
 
 def fix_pagename(name):
@@ -1367,7 +1405,7 @@ def create_page_revisions(p, mw_p, parsed_page):
             p_h.save()
         except IntegrityError:
             connection.close()
-        print "Imported historical page %s" % p.name.encode('utf-8')
+        print "  Imported historical page %s" % p.name.encode('utf-8')
 
 
 def get_page_list(apfilterredir='nonredirects'):
@@ -1412,18 +1450,18 @@ def page_lock(f):
 @page_lock
 def import_page(mw_p):
     from pages.models import Page, slugify
-    print "Importing %s" % mw_p.title.encode('utf-8')
+    print "  Importing %s" % mw_p.title.encode('utf-8')
     parsed = parse_page(mw_p.title)
     html = parsed['html']
     name = fix_pagename(mw_p.title)
 
     if Page.objects.filter(slug=slugify(name)).exists():
-        print "Page %s already exists" % name.encode('utf-8')
+        print "  Page %s already exists" % name.encode('utf-8')
         # Page already exists with this slug.  This is probably because
         # MediaWiki has case-sensitive pagenames.
         other_page = Page.objects.get(slug=slugify(name))
         if len(html) > other_page.content:
-            print "Clearing out other page..", other_page.name.encode('utf-8')
+            print "  Clearing out other page..", other_page.name.encode('utf-8')
             # *This* page has more content.  Let's use it instead.
             for other_page_version in other_page.versions.all():
                 other_page_version.delete()
@@ -1529,10 +1567,10 @@ def find_more_mapdata():
     from pages.models import Page
 
     for p in Page.objects.all():
-        print 'Looking for mapdata in', p.name
+        print '  Looking for mapdata in', p.name
         coord = find_non_googlemaps_coordinates(p.content)
         if coord:
-            print "Adding mapdata for", p.name
+            print "  Adding mapdata for", p.name
             mapdata = MapData.objects.filter(page=p)
             y = float(coord['lat'])
             x = float(coord['lon'])
@@ -1550,7 +1588,7 @@ def find_more_mapdata():
             except IntegrityError:
                 connection.close()
             except ValueError:
-                print "Bad value in mapdata"
+                print "  Bad value in mapdata"
 
 
 def clear_out_existing_data():
@@ -1559,10 +1597,17 @@ def clear_out_existing_data():
     etc before running the import.
     """
     from django.db import connection
-    from django.contrib.auth.models import User
-    #for p in User.objects.all():
-    #    p.delete()
     cursor = connection.cursor()
+
+    from django.contrib.auth.models import User
+    from users.models import UserProfile
+    print 'Clearing out all user data'
+    for u in UserProfile.objects.all():
+        u.delete()
+    for u in User.objects.all():
+        u.delete()
+    print 'All user data deleted'
+
     print 'Bulk clearing out all map data'
     cursor.execute('DELETE from maps_mapdata')
     print 'All map data deleted'
@@ -1613,8 +1658,11 @@ def turn_off_search():
     models.signals.m2m_changed.disconnect(sender=PageTagSet.tags.through)
 
 
-def run():
+def run(**options):
     global site, SCRIPT_PATH
+
+    if options.get('users_email_csv'):
+        return set_user_emails_from_csv(options.get('users_email_csv'))
 
     url = raw_input("Enter the address of a MediaWiki site (ex: http://arborwiki.org/): ")
     site = wiki.Wiki(guess_api_endpoint(url))

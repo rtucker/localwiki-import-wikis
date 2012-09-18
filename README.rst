@@ -29,6 +29,24 @@ Follow the prompts to complete the import!
 
    $ localwiki-manage rebuild_index
 
+6. The import will grab users and their edit history, but it won't import their
+   email address or password.  If you have a way to obtain the old user
+   passwords, you can run the following::
+
+   $ localwiki-manage import_mediawiki --users_email_csv=<users_csv>
+
+Where `users_csv` is a CSV file of the form username,email.
+
+Users will then be able to log in after they reset their password.
+
+
+Apache config
+-------------
+
+There is an example apache config in conf/ that will help with migrating
+old mediawiki-style URLs.  We strive for near 100% URL compatibility
+with MediaWiki because breaking links just isn't cool.
+
 ------------
 
 Copyright (c) 2012 Philip Neustrom <philipn@gmail.com>

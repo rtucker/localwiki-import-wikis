@@ -8,6 +8,7 @@ setup(
     packages = find_packages(),
     install_requires=[
         'mediawikitools==1.2.0',
+        'progress==1.0.2',
     ],
     dependency_links=[
         'https://github.com/mivanov/python-mediawikitools/tarball/master#egg=mediawikitools-1.2.0',
