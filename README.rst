@@ -35,10 +35,15 @@ Follow the prompts to complete the import!
 
    $ localwiki-manage import_mediawiki --users_email_csv=<users_csv>
 
-Where `users_csv` is a CSV file of the form username,email.
+Where `users_csv` is a CSV file of the form username,email,<optional real name>.
 
 Users will then be able to log in after they reset their password.
 
+Here's how to get a users CSV file using MySQL::
+
+    SELECT user_name,user_email,user_real_name FROM wiki_user INTO OUTFILE '/tmp/users.csv' FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
+
+The file will then be at `/tmp/users.csv`.
 
 Apache config
 -------------

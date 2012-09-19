@@ -25,6 +25,7 @@ from dateutil.parser import parse as date_parse
 from mediawikitools import *
 
 from django.db import transaction
+from django.contrib.auth.models import User
 from django.db import IntegrityError, DatabaseError, connection
 from haystack import site as haystack_site
 from pages.plugins import unquote_url
@@ -123,8 +124,6 @@ def process_concurrently(work_items, work_func, num_workers=4, name='items'):
 
 
 def get_robot_user():
-    from django.contrib.auth.models import User
-
     try:
         u = User.objects.get(username="LocalWikiRobot")
     except User.DoesNotExist:
@@ -146,8 +145,6 @@ def normalize_username(username):
 
 
 def import_users():
-    from django.contrib.auth.models import User
-
     request = api.APIRequest(site, {
         'action': 'query',
         'list': 'allusers',
@@ -187,18 +184,37 @@ def import_users():
 
 def set_user_emails_from_csv(csv_location):
     """
-    Import users' email addresses from provided CSV.
+    Import users' email addresses and real names from provided CSV.
     """
     with open(csv_location) as csvfile:
         reader = csv.reader(csvfile)
         for item in reader:
+            name = None
             username, email = item[0], item[1]
-            user = User.objects.get_or_create(
+            if len(item) >= 3:
+                name = item[2]
+            if not username.strip() or not email.strip():
+                continue
+            user, created = User.objects.get_or_create(
                 username=normalize_username(username))
-            if not user.name:
-                user.name = username
+            if name:
+                user.name = name
+            if created:
+                if not user.name:
+                    user.name = username
+            if User.objects.filter(email=email):
+                other = User.objects.get(email=email)
+                if other.username != user.username:
+                    print ('The user account "%s" is already using '
+                           'the email address %s..skipping' %
+                           (other.username, email))
+                    continue
             user.email = email
-            user.save()
+            try:
+                user.save()
+            except:
+                connection.close()
+                continue
 
 
 def fix_pagename(name):
@@ -1012,8 +1028,6 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
             return file_content
 
     def _create_image_revisions(pfile, image_info, filename, attach_to_pagename):
-        from django.contrib.auth.models import User
-
         rev_num = 0
         total_revs = len(image_info)
         for revision in image_info:

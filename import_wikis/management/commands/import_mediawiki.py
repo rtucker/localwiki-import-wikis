@@ -7,7 +7,7 @@ class Command(BaseCommand):
             'Clears out any existing data.')
     option_list = BaseCommand.option_list + (
         make_option('--users_email_csv', '-u', dest='users_email_csv',
-            help='A CSV containing username,email'),
+            help='A CSV containing username,email,<optional real name>'),
     )
 
     def handle(self, *args, **options):
