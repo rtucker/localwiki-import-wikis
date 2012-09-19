@@ -1043,7 +1043,7 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
             if history_comment:
                 history_comment = history_comment[:200]
 
-            username = revision.get('user', None)
+            username = normalize_username(revision.get('user', None))
             user = User.objects.filter(username=username)
             if user:
                 user = user[0]
@@ -1380,7 +1380,7 @@ def create_page_revisions(p, mw_p, parsed_page):
         if history_comment:
             history_comment = history_comment[:200]
 
-        username = revision.get('user', None)
+        username = normalize_username(revision.get('user', None))
         user = User.objects.filter(username=username)
         if user:
             user = user[0]
