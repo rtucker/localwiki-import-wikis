@@ -1114,10 +1114,6 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
         quoted_image_title = page_url_to_name(image_description_url)
         attach_to_pagename = attach_to_pagename or pagename
 
-        if PageFile.objects.filter(name=filename,
-                                   slug=slugify(attach_to_pagename)):
-            continue  # Image already exists.
-
         # For each image, find the image's supporting HTML in the tree
         # and transform it to comply with our HTML.
         html_before_fix = _convert_to_string(tree)
@@ -1128,6 +1124,10 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
             # Image isn't actually on the page, so let's not create or attach
             # the PageFile.
             continue
+
+        if PageFile.objects.filter(name=filename,
+                                   slug=slugify(attach_to_pagename)):
+            continue  # Image already exists.
 
         # Create the PageFile and associate it with the current page.
         print "Creating image %s on page %s" % (filename.encode('utf-8'), pagename.encode('utf-8'))
