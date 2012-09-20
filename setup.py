@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 setup(
     name = "localwiki-import-wikis",
-    version = "0.2",
+    version = "0.3",
     author='Philip Neustrom',
     author_email='philipn@gmail.com',
     url='http://github.com/philipn/localwiki-import-wikis',
