@@ -4,6 +4,7 @@ setup(
     version = "0.3",
     author='Philip Neustrom',
     author_email='philipn@gmail.com',
+    description="Import legacy wiki engines into LocalWiki",
     url='http://github.com/philipn/localwiki-import-wikis',
     packages = find_packages(),
     install_requires=[
