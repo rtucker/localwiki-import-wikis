@@ -7,13 +7,17 @@
     # /wiki/User:My_user --> /User/My_page
     # /wiki/Talk:My_page --> /My_page/Talk
 
+    # old MediaWiki URLs
     RewriteEngine On
-    # old mediawiki URLs
-    RewriteRule ^/index.php/(.*)$ http://arborwiki-new.org/$1 [R=301]
-    RewriteRule ^/wiki/Category:(.*)$ http://arborwiki-new.org/$1 [R=301]
-    RewriteRule ^/wiki/Talk:(.*?)/{0,1}$ http://arborwiki-new.org/$1/Talk [R=301]
-    RewriteRule ^/wiki/User:(.*)$ http://arborwiki-new.org/User/$1 [R=301]
-    RewriteRule ^/wiki/(.*)$ http://arborwiki-new.org/$1 [R=301]
+
+    RewriteCond %{QUERY_STRING} ^title=(\w+)(.*)$
+    RewriteRule ^/index.php /%1? [R=301]
+
+    RewriteRule ^/index\.php/{0,1}$ http://arborwiki.org/ [R=301]
+    RewriteRule ^/city/Category:(.*)$ http://arborwiki.org/$1 [R=301]
+    RewriteRule ^/city/Talk:(.*?)/{0,1}$ http://arborwiki.org/$1/Talk [R=301]
+    RewriteRule ^/city/User:(.*)$ http://arborwiki.org/User/$1 [R=301]
+    RewriteRule ^/city/(.*)$ http://arborwiki.org/$1 [R=301]
 
     # .. usual stuff down here ..
 
