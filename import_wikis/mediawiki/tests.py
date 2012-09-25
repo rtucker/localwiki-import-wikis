@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import site
 import unittest
@@ -27,8 +28,8 @@ def is_html_equal(h1, h2):
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
-    h1_parsed = p.parseFragment(h1, encoding='UTF-8')
-    h2_parsed = p.parseFragment(h2, encoding='UTF-8')
+    h1_parsed = p.parseFragment(h1.strip(), encoding='UTF-8')
+    h2_parsed = p.parseFragment(h2.strip(), encoding='UTF-8')
     return _convert_to_string(h1_parsed) == _convert_to_string(h2_parsed)
 
 
@@ -172,61 +173,25 @@ class TestHTMLNormalization(unittest.TestCase):
 					<tbody>
 						<tr>
 							<th colspan="2" style="background-color: #ccccff; text-align: center;">
-								<strong>50&#39;s Lube Cruise</strong></th>
+								<strong>Lube Cruise</strong></th>
 						</tr>
 						<tr>
 							<th>
 								Business Name</th>
 							<td>
-								<span class="fn org">50&#39;s Lube Cruise</span></td>
+								Lube Cruise</td>
 						</tr>
 						<tr>
 							<th>
 								Address</th>
 							<td>
-								<span class="adr"><span class="street-address">5794 <a href="N%20Canton%20Center%20Rd">N Canton Center Rd</a> </span> </span></td>
+								5794 Fake</td>
 						</tr>
 						<tr>
 							<th>
 								City</th>
 							<td>
-								<span class="locality"><a href="Canton">Canton</a></span></td>
-						</tr>
-						<tr>
-							<th>
-								State</th>
-							<td>
-								<span class="region">MI</span></td>
-						</tr>
-						<tr>
-							<th>
-								Zip Code</th>
-							<td>
-								<span class="postal-code"><a href="48187">48187</a></span></td>
-						</tr>
-						<tr>
-							<th>
-								Phone</th>
-							<td>
-								<span class="tel">(734) 404-6291&lrm;</span></td>
-						</tr>
-						<tr>
-							<th>
-								Website</th>
-							<td>
-								&nbsp;</td>
-						</tr>
-						<tr>
-							<th>
-								County</th>
-							<td>
-								<a href="Wayne">Wayne</a></td>
-						</tr>
-						<tr>
-							<th>
-								Year Established</th>
-							<td>
-								&nbsp;</td>
+								Fake</td>
 						</tr>
 					</tbody>
 				</table>
@@ -234,69 +199,33 @@ class TestHTMLNormalization(unittest.TestCase):
 		</tr>
 	</tbody>
 </table>"""
-        expected_html = """
-				<table style="width: 30em;">
+        expected_html = """<table style="width: 30em;">
 					<tbody>
 						<tr>
 							<th colspan="2" style="background-color: #ccccff; text-align: center;">
-								<strong>50&#39;s Lube Cruise</strong></th>
+								<strong>Lube Cruise</strong></th>
 						</tr>
 						<tr>
 							<th>
 								Business Name</th>
 							<td>
-								50&#39;s Lube Cruise</td>
+								Lube Cruise</td>
 						</tr>
 						<tr>
 							<th>
 								Address</th>
 							<td>
-								5794 <a href="N%20Canton%20Center%20Rd">N Canton Center Rd</a></td>
+								5794 Fake</td>
 						</tr>
 						<tr>
 							<th>
 								City</th>
 							<td>
-								<a href="Canton">Canton</a></td>
-						</tr>
-						<tr>
-							<th>
-								State</th>
-							<td>
-								MI</td>
-						</tr>
-						<tr>
-							<th>
-								Zip Code</th>
-							<td>
-								<a href="48187">48187</a></td>
-						</tr>
-						<tr>
-							<th>
-								Phone</th>
-							<td>
-								(734) 404-6291&lrm;</td>
-						</tr>
-						<tr>
-							<th>
-								Website</th>
-							<td>
-								&nbsp;</td>
-						</tr>
-						<tr>
-							<th>
-								County</th>
-							<td>
-								<a href="Wayne">Wayne</a></td>
-						</tr>
-						<tr>
-							<th>
-								Year Established</th>
-							<td>
-								&nbsp;</td>
+								Fake</td>
 						</tr>
 					</tbody>
-				</table>"""
+				</table>
+"""
         self.assertTrue(is_html_equal(mediawiki.process_html(html, "Test double table"), expected_html))
 
     def test_fix_embed(self):

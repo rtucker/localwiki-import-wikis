@@ -26,6 +26,7 @@ from mediawikitools import *
 
 from django.db import transaction
 from django.contrib.auth.models import User
+from django.core.management import call_command
 from django.db import IntegrityError, DatabaseError, connection
 from haystack import site as haystack_site
 from pages.plugins import unquote_url
@@ -575,6 +576,8 @@ def strip_tags(tree):
 
     # Merge the <stripme> tags into the tree.
     for subtree in tree:
+        if subtree is None or isinstance(subtree, basestring):
+            continue
         etree.strip_tags(subtree, 'stripme')
 
     return tree
@@ -1307,9 +1310,11 @@ def convert_some_divs_to_tables(tree):
             item.tag = 'span'
             return
         item.tag = 'table'
+        tbody = etree.Element('tbody')
         tr = etree.Element('tr')
         td = etree.Element('td')
         tr.append(td)
+        tbody.append(tr)
 
         for child in item.iterchildren():
             td.append(child)
@@ -1319,7 +1324,7 @@ def convert_some_divs_to_tables(tree):
             td.attrib['style'] = style
 
         item.clear()
-        item.append(td)
+        item.append(tbody)
 
     for elem in tree:
         if elem is None or isinstance(elem, basestring):
@@ -1328,6 +1333,76 @@ def convert_some_divs_to_tables(tree):
             _fix(elem)
         for item in elem.findall(".//div"):
             _fix(item)
+    return tree
+
+
+def fix_double_tables(tree):
+    """
+    The conversion sometimes ends up with the ever-so-pointless
+    <table><tr><td><table>..</table></td></tr></table>
+    """
+    # For easier XPath searching.
+    main = etree.Element('div')
+    for elem in tree:
+        main.append(elem)
+
+    # First, let's zero out any essentially-empty <p> tags that are
+    # inside of <td>s.  We need to do this because some of the infoboxes
+    # are set up to create <p><br></p> all over the place.
+    for p in main.findall('.//table/tbody/tr/td/p'):
+        text = p.text or ''
+        tail = p.tail or ''
+        if (not text.strip() and not tail.strip() and
+            all([c.tag == 'br' for c in p.getchildren()])):
+            p.tag = 'stripme'
+    etree.strip_elements(main, 'stripme')
+
+    # Find all tables-inside-tables.
+    for table in main.findall('.//table/tbody/tr/td/table'):
+        # If the containing tbody has no other rows
+        # and the containing row has no other cells
+        # then let's ditch the containing table.
+       
+        table.attrib['from_merge'] = '1'
+
+        containing_table = table.getparent().getparent().getparent().getparent()
+        containing_tbody = table.getparent().getparent().getparent()
+        containing_tr = table.getparent().getparent()
+        containing_td = table.getparent()
+        if (len(containing_tbody.getchildren()) == 1 and
+            len(containing_tr.getchildren()) == 1):
+            containing_table.tag = 'merge1'
+            containing_tbody.tag = 'merge2'
+            containing_tr.tag = 'merge3'
+            containing_td.tag = 'merge4'
+
+    etree.strip_tags(main, 'merge4')
+    etree.strip_tags(main, 'merge3')
+    etree.strip_tags(main, 'merge2')
+    etree.strip_tags(main, 'merge1')
+    tables_from_merge = list(main.findall(".//table[@from_merge='1']"))
+
+    # Merge adjacent tables that were created via our process.
+    merged_into = {}
+    for i, table in enumerate(tables_from_merge):
+        del table.attrib['from_merge']
+        # If we have the same parent as the previously-merged and we occur
+        # right after the previously-merged, then append all the table
+        # rows to the previously-merged table.
+        prev = tables_from_merge[i - 1]
+        parent_children = list(table.getparent())
+        if (i > 0 and prev.getparent() == table.getparent() and
+            parent_children.index(table) == (parent_children.index(prev) + 1)):
+            merge_into = merged_into.get(prev)
+            if not merge_into:
+                merge_into = prev[0]  # previous tbody
+                merged_into[table] = merge_into
+            tbody = table[0]
+            for tr in tbody:
+                merge_into.append(tr)
+            table.tag = 'removeme'
+
+    tree = [elem for elem in main]
     return tree
 
 
@@ -1367,9 +1442,11 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
 
     tree = convert_some_divs_to_tables(tree)
 
+    tree = fix_double_tables(tree)
+
     tree = remove_elements_tagged_for_removal(tree)
 
-    return _convert_to_string(tree)
+    return _convert_to_string(tree).strip()
 
 
 def create_page_revisions(p, mw_p, parsed_page):
@@ -1730,6 +1807,9 @@ def run(**options):
     if _maps_installed:
         print "Processing map data..."
         process_mapdata()
+    # We need to run setup_all to get back the initial user data
+    # ("Anonymous", etc)
+    call_command('setup_all')
     print "Import completed in %.2f minutes" % ((time.time() - start) / 60.0)
 
 if __name__ == '__main__':
