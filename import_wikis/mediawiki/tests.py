@@ -150,6 +150,11 @@ class TestHTMLNormalization(unittest.TestCase):
         fixed_html = _convert_to_string(fixed_tree)
         self.assertTrue(is_html_equal(fixed_html, expected_html))
 
+    def test_remove_spans(self):
+        html = """<p><span class="fn something">hi there <a href="http://example.com/">dude</a></span></p>"""
+        expected_html = """<p>hi there <a href="http://example.com/">dude</a></p>"""
+        self.assertTrue(is_html_equal(mediawiki.process_html(html, "Test remove span"), expected_html))
+
     def test_convert_div(self):
         html = """<div>Blah</div>"""
         expected_html = """<table><tr><td>Blah</td></tr></table>"""
@@ -157,6 +162,142 @@ class TestHTMLNormalization(unittest.TestCase):
         html = """<div class="adr">123 Main Street</div>"""
         expected_html = """<span class="adr">123 Main Street</span>"""
         self.assertTrue(is_html_equal(mediawiki.process_html(html, "Test convert special div"), expected_html))
+
+    def test_double_table(self):
+        html = """<table>
+	<tbody>
+		<tr>
+			<td>
+				<table style="width: 30em;">
+					<tbody>
+						<tr>
+							<th colspan="2" style="background-color: #ccccff; text-align: center;">
+								<strong>50&#39;s Lube Cruise</strong></th>
+						</tr>
+						<tr>
+							<th>
+								Business Name</th>
+							<td>
+								<span class="fn org">50&#39;s Lube Cruise</span></td>
+						</tr>
+						<tr>
+							<th>
+								Address</th>
+							<td>
+								<span class="adr"><span class="street-address">5794 <a href="N%20Canton%20Center%20Rd">N Canton Center Rd</a> </span> </span></td>
+						</tr>
+						<tr>
+							<th>
+								City</th>
+							<td>
+								<span class="locality"><a href="Canton">Canton</a></span></td>
+						</tr>
+						<tr>
+							<th>
+								State</th>
+							<td>
+								<span class="region">MI</span></td>
+						</tr>
+						<tr>
+							<th>
+								Zip Code</th>
+							<td>
+								<span class="postal-code"><a href="48187">48187</a></span></td>
+						</tr>
+						<tr>
+							<th>
+								Phone</th>
+							<td>
+								<span class="tel">(734) 404-6291&lrm;</span></td>
+						</tr>
+						<tr>
+							<th>
+								Website</th>
+							<td>
+								&nbsp;</td>
+						</tr>
+						<tr>
+							<th>
+								County</th>
+							<td>
+								<a href="Wayne">Wayne</a></td>
+						</tr>
+						<tr>
+							<th>
+								Year Established</th>
+							<td>
+								&nbsp;</td>
+						</tr>
+					</tbody>
+				</table>
+			</td>
+		</tr>
+	</tbody>
+</table>"""
+        expected_html = """
+				<table style="width: 30em;">
+					<tbody>
+						<tr>
+							<th colspan="2" style="background-color: #ccccff; text-align: center;">
+								<strong>50&#39;s Lube Cruise</strong></th>
+						</tr>
+						<tr>
+							<th>
+								Business Name</th>
+							<td>
+								50&#39;s Lube Cruise</td>
+						</tr>
+						<tr>
+							<th>
+								Address</th>
+							<td>
+								5794 <a href="N%20Canton%20Center%20Rd">N Canton Center Rd</a></td>
+						</tr>
+						<tr>
+							<th>
+								City</th>
+							<td>
+								<a href="Canton">Canton</a></td>
+						</tr>
+						<tr>
+							<th>
+								State</th>
+							<td>
+								MI</td>
+						</tr>
+						<tr>
+							<th>
+								Zip Code</th>
+							<td>
+								<a href="48187">48187</a></td>
+						</tr>
+						<tr>
+							<th>
+								Phone</th>
+							<td>
+								(734) 404-6291&lrm;</td>
+						</tr>
+						<tr>
+							<th>
+								Website</th>
+							<td>
+								&nbsp;</td>
+						</tr>
+						<tr>
+							<th>
+								County</th>
+							<td>
+								<a href="Wayne">Wayne</a></td>
+						</tr>
+						<tr>
+							<th>
+								Year Established</th>
+							<td>
+								&nbsp;</td>
+						</tr>
+					</tbody>
+				</table>"""
+        self.assertTrue(is_html_equal(mediawiki.process_html(html, "Test double table"), expected_html))
 
     def test_fix_embed(self):
         html = """<p><object width="320" height="245"><param name="movie" value="http://www.archive.org/flow/FlowPlayerLight.swf?config=%7Bembedded%3Atrue%2CshowFullScreenButton%3Atrue%2CshowMuteVolumeButton%3Atrue%2CshowMenu%3Atrue%2CautoBuffering%3Atrue%2CautoPlay%3Afalse%2CinitialScale%3A%27fit%27%2CmenuItems%3A%5Bfalse%2Cfalse%2Cfalse%2Cfalse%2Ctrue%2Ctrue%2Cfalse%5D%2CusePlayOverlay%3Afalse%2CshowPlayListButtons%3Atrue%2CplayList%3A%5B%7Burl%3A%27ssfGNSTRIK1%2FssfGNSTRIK1%5F512kb%2Emp4%27%7D%5D%2CcontrolBarGloss%3A%27high%27%2CshowVolumeSlider%3Atrue%2CbaseURL%3A%27http%3A%2F%2Fwww%2Earchive%2Eorg%2Fdownload%2F%27%2Cloop%3Afalse%2CcontrolBarBackgroundColor%3A%270x000000%27%7D"/><param name="wmode" value="transparent"/><embed height="245" width="320" wmode="transparent" type="application/x-shockwave-flash" src="http://www.archive.org/flow/FlowPlayerLight.swf?config=%7Bembedded%3Atrue%2CshowFullScreenButton%3Atrue%2CshowMuteVolumeButton%3Atrue%2CshowMenu%3Atrue%2CautoBuffering%3Atrue%2CautoPlay%3Afalse%2CinitialScale%3A%27fit%27%2CmenuItems%3A%5Bfalse%2Cfalse%2Cfalse%2Cfalse%2Ctrue%2Ctrue%2Cfalse%5D%2CusePlayOverlay%3Afalse%2CshowPlayListButtons%3Atrue%2CplayList%3A%5B%7Burl%3A%27ssfGNSTRIK1%2FssfGNSTRIK1%5F512kb%2Emp4%27%7D%5D%2CcontrolBarGloss%3A%27high%27%2CshowVolumeSlider%3Atrue%2CbaseURL%3A%27http%3A%2F%2Fwww%2Earchive%2Eorg%2Fdownload%2F%27%2Cloop%3Afalse%2CcontrolBarBackgroundColor%3A%270x000000%27%7D"/></object></p>"""

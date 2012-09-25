@@ -548,19 +548,35 @@ def remove_edit_links(tree):
     return tree
 
 
-def throw_out_tags(tree):
-    throw_out = ['small']
+def strip_tags(tree):
+    """
+    There's some tags, like <small>, that we don't want to support.  We
+    merge their content into the tree and remove the tag.
+    """
+    def _should_strip(elem):
+        if elem.tag == 'small':
+            return True
+        if elem.tag == 'span':
+            _special_classes = ['smwttinline', 'smwttcontent']
+            # We want to keep certain spans that we process later on.
+            if any([has_class(c, elem) for c in _special_classes]):
+                return False
+            return True
+        return False
+
+    # First, replace all tag names that ought to be stripped with
+    # <stripme>
     for elem in tree:
         if elem is None or isinstance(elem, basestring):
             continue
-        for parent in elem.getiterator():
-            for child in parent:
-                if (child.tag in throw_out):
-                    parent.text = parent.text or ''
-                    parent.tail = parent.tail or ''
-                    if child.text:
-                        parent.text += (child.text + (child.tail or ''))
-                    child.tag = 'removeme'
+        for elem in elem.getiterator():
+            if _should_strip(elem):
+                elem.tag = 'stripme'
+
+    # Merge the <stripme> tags into the tree.
+    for subtree in tree:
+        etree.strip_tags(subtree, 'stripme')
+
     return tree
 
 
@@ -1329,6 +1345,11 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
                             tree=_treebuilder,
                             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
+
+    tree = remove_edit_links(tree)
+    tree = remove_headline_labels(tree)
+    tree = strip_tags(tree)
+
     tree = replace_mw_templates_with_includes(tree, templates, pagename)
     tree = fix_references(tree)
     tree = fix_embeds(tree)
@@ -1339,9 +1360,6 @@ def process_html(html, pagename=None, mw_page_id=None, templates=[],
                            attach_img_to_pagename, show_img_borders)
     tree = fix_internal_links(tree)
     tree = fix_basic_tags(tree)
-    tree = remove_edit_links(tree)
-    tree = remove_headline_labels(tree)
-    tree = throw_out_tags(tree)
     tree = remove_toc(tree)
     tree = replace_blockquote(tree)
     tree = fix_image_galleries(tree)
