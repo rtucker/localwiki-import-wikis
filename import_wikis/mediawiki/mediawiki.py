@@ -755,7 +755,13 @@ def fix_googlemaps(tree, pagename, save_data=True):
             for marker in markers:
                 if not marker.strip():
                         continue
-                lat, lon, color = marker.split(',')
+                vals = marker.split(',')
+                if len(vals) == 2:
+                    lat, lon = vals
+                elif len(vals) == 3:
+                    lat, lon, color = vals
+                else:
+                    continue
                 mapdata_objects_to_create[pagename].append((lat, lon))
         else:
             # Use the map center as the point

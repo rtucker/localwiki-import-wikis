@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 setup(
     name = "localwiki-import-wikis",
-    version = "0.3",
+    version = "0.3.2",
     author='Philip Neustrom',
     author_email='philipn@gmail.com',
     description="Import legacy wiki engines into LocalWiki",
