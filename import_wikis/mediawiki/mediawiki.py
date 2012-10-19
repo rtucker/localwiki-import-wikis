@@ -20,6 +20,7 @@ _treebuilder = html5lib.treebuilders.getTreeBuilder("lxml")
 from xml.dom import minidom
 from urlparse import urljoin, urlsplit, urlparse, parse_qs
 import urllib
+import urllib2
 import re
 from dateutil.parser import parse as date_parse
 from mediawikitools import *
@@ -1045,11 +1046,9 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
     """
     def _get_image_binary(image_url):
             # Get the full-size image binary and store it in a string.
-            img_ptr = urllib.URLopener()
-            img_tmp_f = open(img_ptr.retrieve(image_url)[0], 'r')
-            file_content = ContentFile(img_tmp_f.read())
-            img_tmp_f.close()
-            img_ptr.close()
+            img_f = urllib2.urlopen(image_url, None, 10)
+            file_content = ContentFile(img_f.read())
+            img_f.close()
             return file_content
 
     def _create_image_revisions(pfile, image_info, filename, attach_to_pagename):
@@ -1163,6 +1162,8 @@ def grab_images(tree, page_id, pagename, attach_to_pagename=None,
             pfile.save(track_changes=False)
             _create_image_revisions(pfile, image_info, filename, attach_to_pagename)
         except IntegrityError:
+            connection.close()
+        except IOError:
             connection.close()
 
     return tree
