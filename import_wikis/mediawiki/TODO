@@ -1,4 +1,23 @@
- * Usernames are case sensitive in mediawiki.  We need to normalize on
-   import somehow.  Rename on import?  "MattH" and "Matth" -> "MattH" and "Matth_2" ?
+ * Failing test for embed thing
+
  * Turn <object> into <iframe> when possible -- likely we can only
    handle certain providers like archive.org, etc. Otherwise turn into... links?
+
+ * Handle <dt><dd> - turn into paragraphs with indent?
+
+
+
+  File "/usr/lib/python2.6/threading.py", line 532, in __bootstrap_inner
+    self.run()
+  File "/usr/lib/python2.6/threading.py", line 484, in run
+    self.__target(*self.__args, **self.__kwargs)
+  File "/home/philip/projects/localwiki/localwiki-import-wikis/import_wikis/mediawiki/mediawiki.py", line 87, in worker
+    work_func(item)
+  File "/home/philip/projects/localwiki/localwiki-import-wikis/import_wikis/mediawiki/mediawiki.py", line 1565, in new_f
+    f(mw_p)
+  File "/home/philip/projects/localwiki/localwiki-import-wikis/import_wikis/mediawiki/mediawiki.py", line 1624, in import_page
+    process_page_categories(p, parsed['categories'])
+  File "/home/philip/projects/localwiki/localwiki-import-wikis/import_wikis/mediawiki/mediawiki.py", line 1639, in process_page_categories
+    c = str(c).replace("_", " ")
+UnicodeEncodeError: 'ascii' codec can't encode character u'\u2019' in position 7: ordinal not in range(128)
+
