@@ -26,6 +26,20 @@ To use:
 You'll then have an import of the old Sycamore site!  User accounts are moved over
 but passwords aren't.  Users will have to reset their password in order to sign in
 for now.  We could fix this.
+
+=== For faster import/export (large site) ===
+
+Export using:
+
+   python export.py --just_pages
+   python export.py --just_files
+   python export.py --just_maps
+
+which will give you three different content export files.
+
+Then run syc_import with:
+
+  localwiki-manage runscript syc_import --script-args=/path/to/the/page_dump.xml /path/to/the/user.dump.xml /path/to/the/files_dump.xml /path/to/the/map_dump.xml
 """
 
 from multiprocessing import Process
@@ -34,20 +48,6 @@ import os
 import sys
 import site
 import gc
-
-# We have to hard-code these here, as we run a few setup commands (in
-# setup_all) that execute before the settings can be safely loaded.
-DATA_ROOT = os.path.join(sys.prefix, 'share', 'localwiki')
-PROJECT_ROOT = os.path.join(os.path.split(os.path.abspath(__file__))[0], '..')
-
-site.addsitedir(PROJECT_ROOT)
-
-# Add virtualenv packages
-site_packages = os.path.join(DATA_ROOT, 'env', 'lib',
-                    'python%s' % sys.version[:3], 'site-packages')
-site.addsitedir(site_packages)
-
-os.environ['DJANGO_SETTINGS_MODULE'] = 'sapling.settings'
 
 import re
 import datetime
@@ -66,7 +66,7 @@ from django.db import transaction
 
 #################################
 # CHANGE THIS
-SYCAMORE_CODE_PATH = '/home/philip/projects/sycamore/sycamore'
+SYCAMORE_CODE_PATH = '/home/philip/sycamore'
 #################################
 sys.path.append(SYCAMORE_CODE_PATH)
 
@@ -611,9 +611,9 @@ class Formatter(sycamore_HTMLFormatter):
         return '\n'.join(address.strip().split('\n')[1:-1])
 
     def process_footnote_macro(self, macro_obj, name, args):
-        args = args.strip()
-        if not args:
+        if not args or not args.strip():
             return
+        args = args.strip()
         html = strip_outer_para(render_wikitext(args, strong=False))
         if not hasattr(self, '_footnotes'):
             self._footnotes = []
@@ -1070,8 +1070,11 @@ def render_wikitext(text, strong=True, page_slug=None):
     formatter = Formatter(request, page_slug=page_slug)
     page = Page("PAGENAME", request)
 
-    wiki_html = sycamore_wikifyString(text, request, page,
-        formatter=formatter, strong=strong, doCache=False)
+    try:
+      wiki_html = sycamore_wikifyString(text, request, page,
+          formatter=formatter, strong=strong, doCache=False)
+    except:
+      return ''
 
     if strong and hasattr(formatter, '_footnotes'):
         items = ["%s. %s" % (id, note) for (note, id) in formatter._footnotes]
@@ -1230,7 +1233,6 @@ def process_user_element(element):
         User.objects.create_user(username, email)
         print 'created user: %s %s' % (username, email)
 
-
 def process_element(element, parent, parent_parent, just_pages, exclude_pages, just_maps):
     from django.contrib.auth.models import User
     if parent is None:
@@ -1250,7 +1252,7 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
                 try:
                     p = Page.objects.get(slug=slugify(normalize_pagename(element.attrib['pagename'])))
                 except Page.DoesNotExist:
-                    pass
+                    return
                 else:
                     mapdata = MapData.objects.filter(page=p)
                     x = float(element.attrib['x'])
@@ -1343,7 +1345,7 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
                 m_h.save()
 
 
-                print "\timported image %s on page %s" % (filename, element.attrib.get('attached_to_pagename'))
+                print "\timported image %s on page %s" % (filename.encode('utf-8'), element.attrib.get('attached_to_pagename').encode('utf-8'))
         # Old version of a file for a page.
         elif (element.tag == 'file' and
             element.attrib.get('deleted', 'False') == 'True'):
@@ -1393,7 +1395,7 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
             pfile_h.history_type = 1
             pfile_h.save()
 
-            print "\timported historical file %s on page %s" % (filename, normalize_pagename(element.attrib.get('attached_to_pagename')))
+            print "\timported historical file %s on page %s" % (filename.encode('utf-8'), normalize_pagename(element.attrib.get('attached_to_pagename')).encode('utf-8'))
 
 
 @transaction.commit_on_success
@@ -1410,7 +1412,21 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
     jobs = []
     to_start = []
     items = []
-    for event, element in etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True):
+    max_jobs = 10
+    n = 0
+    parsing = True
+
+    parser = etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True)
+    while parsing:
+        try:
+            event, element = parser.next()
+        except StopIteration:
+            parsing = False
+        except Exception, s:
+           print "ERROR", s
+    
+        n += 1
+        
         for p in to_start:
             # Clean up address space before fork()
             gc.collect()
@@ -1418,7 +1434,7 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
             jobs.append(p)
             to_start.remove(p)
 
-        while len(jobs) >= 10:
+        while len(jobs) >= max_jobs:
             for p in jobs:
                 p.join(0.05)
                 if not p.is_alive():
@@ -1433,12 +1449,14 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
         items.append((copy.deepcopy(element), copy.deepcopy(parent), copy.deepcopy(parent_parent)))
 
         if not exclude_pages:
-            process_every = 40
+            max_jobs = 20
         else:
             # File imports use way more memory, so we send less elements
             # to the process.
-            process_every = 30
+            max_jobs = 4
 
+        import_process(items, just_pages, exclude_pages, just_maps)
+        items = []
         if len(items) > process_every:
             p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
             p.daemon = True
@@ -1453,7 +1471,10 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
             parent.remove(previous_sibling)
             previous_sibling = element.getprevious()
 
+        gc.collect()
 
+
+    gc.collect()
     p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
     p.daemon = True
     to_start.append(p)
@@ -1467,6 +1488,7 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
 
 
 def users_import_from_export_file(f):
+    print 'importing users'
     for event, element in etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True):
         if event == 'start':
             pass
@@ -1528,6 +1550,7 @@ def clear_out_everything():
     print 'All page history deleted'
 
     transaction.commit_unless_managed()
+    print 'Done clearing out'
 
 
 def process_redirects():
@@ -1601,26 +1624,33 @@ def turn_off_search():
 def run(*args, **kwargs):
     if not args:
         print "usage: python manage.py runscript syc_import --script-args=<export_file> <user_export_file>"
+        print "or   : python manage.py runscript syc_import --script-args=<page_export_file> <user_export_file> <file_export_file> <map_export_file>"
         return
     filename = args[0]
     user_filename = args[1] 
+
+    page_filename = filename
+    file_filename = filename
+    map_filename = filename
+    if len(args) == 4:
+        file_filename = args[2]
+        map_filename = args[3]
+         
+
     turn_off_search()
     clear_out_everything()
     f = open(user_filename, 'r')
     users_import_from_export_file(f)
     f.close()
-    f = open(filename, 'r')
+    f = open(file_filename, 'r')
     import_from_export_file(f, exclude_pages=True)
+    fix_historical_ids()
     f.close()
-    f = open(filename, 'r')
+    f = open(page_filename, 'r')
     import_from_export_file(f, just_pages=True)
     f.close()
-    f = open(filename, 'r')
+    fix_historical_ids()
+    f = open(map_filename, 'r')
     import_from_export_file(f, just_maps=True)
     f.close()
-    process_redirects()
     fix_historical_ids()
-
-
-if __name__ == '__main__':
-    run(*sys.argv[1:])
