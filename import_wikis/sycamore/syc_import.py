@@ -1593,7 +1593,7 @@ def fix_historical_ids():
     """
     print "Fixing historical ids"
     id_map = {}
-    for ph in Page.versions.all():
+    for ph in Page.versions.all().defer('content'):
         if ph.slug in id_map:
             ph.id = id_map[ph.slug]
             ph.save()
@@ -1605,7 +1605,7 @@ def fix_historical_ids():
             ph.save()
 
     id_map = {}
-    for ph in PageFile.versions.all():
+    for ph in PageFile.versions.all().defer('content'):
         if (ph.name, ph.slug) in id_map:
             ph.id = id_map[(ph.name, ph.slug)]
             ph.save()
