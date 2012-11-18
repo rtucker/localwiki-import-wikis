@@ -79,7 +79,7 @@ def users(request, f):
         {'wiki_id':request.config.wiki_id})
     for name, email, enc_password, disabled in request.cursor.fetchall():
         if not EXPORT_ENC_PASSWORD:
-	    enc_password = ''
+            enc_password = ''
         d = {
             'name': name,
             'email': email,
