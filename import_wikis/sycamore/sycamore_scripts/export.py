@@ -98,6 +98,7 @@ import xml.dom.minidom
 from xml.dom.minidom import getDOMImplementation
 from base64 import b64encode
 from copy import copy
+from xml.sax.saxutils import escape
 
 import __init__ # woo hackmagic
 __directory__ = os.path.dirname(__file__)
@@ -471,7 +472,7 @@ def events(request, file):
         text = result[6]
 
         file.write('<event %s>' % generate_attributes(d))
-        file.write(text.encode(config.charset))
+        file.write(escape(text.encode(config.charset)))
         file.write('</event>\n')
         
     end_events(request, file)
