@@ -189,9 +189,12 @@ def start_pages(request, file):
     file.write('<pages>\n')
 
 def get_page_text(page):
+    filter_dict = dict.fromkeys(range(32))
+    filter_dict[10] = 10
+
     doc = xml.createDocument(None, "text", None)
     root = doc.documentElement
-    text = doc.createTextNode(page.get_raw_body(fresh=True))
+    text = doc.createTextNode(page.get_raw_body(fresh=True).translate(filter_dict))
     root.appendChild(text)
     return (root.toxml().encode(config.charset) + '\n')
 
