@@ -1272,7 +1272,10 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
                     # Save historical version - with editor info, etc
                     m_h = m.versions.most_recent()
 
-                    edit_time_epoch = float(element.attrib['created_time'])
+                    try:
+                        edit_time_epoch = float(element.attrib['created_time'])
+                    except ValueError:
+                        edit_time_epoch = -1
                     username_edited = element.attrib['created_by']
                     history_user_ip = element.attrib['created_by_ip']
                     if not history_user_ip.strip():
