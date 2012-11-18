@@ -661,7 +661,7 @@ if __name__ == '__main__':
     grab_level = raw_input().strip()
     if grab_level == '2':
         command_line = False
-        request.user = user.User(req)
+        req.user = user.User(req)
 
     export(req, wiki_name=wiki_name, just_pages=just_pages, just_files=just_files, just_maps=just_maps)
     req.db_disconnect()
