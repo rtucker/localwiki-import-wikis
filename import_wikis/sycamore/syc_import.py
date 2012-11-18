@@ -21,6 +21,7 @@ To use:
      have an XML file in the Sycamore/ directory containing a Sycamore XML export.
   6. From your Sycamore/ directory, run python user_export.py.  You'll now have an XML
      file in the Sycamore/ directory containing a Sycamore XML user export.
+       Note: Change EXPORT_ENC_PASSWORD = True if you want to export passwords, too
   7. Run localwiki-manage runscript syc_import --script-args=/path/to/the/dump.xml /path/to/the/user.dump.xml
 
 You'll then have an import of the old Sycamore site!  User accounts are moved over
