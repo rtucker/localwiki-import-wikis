@@ -154,6 +154,12 @@ def export(request, wiki_name=None):
 if __name__ == '__main__':
     command_line = True
 
+    if not EXPORT_ENC_PASSWORD:
+        print("NOTE: Passwords are not being exported.  You can enable")
+        print("      this by editing this file and setting:")
+        print("         EXPORT_ENC_PASSWORD = True")
+        print("")
+
     sys.stdout.write("Enter the wiki shortname: ")
     wiki_name = raw_input().strip().lower()
 
