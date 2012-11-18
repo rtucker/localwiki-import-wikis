@@ -1450,10 +1450,12 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
 
         if not exclude_pages:
             max_jobs = 20
+            process_every = 40
         else:
             # File imports use way more memory, so we send less elements
             # to the process.
             max_jobs = 4
+            process_every = 20
 
         import_process(items, just_pages, exclude_pages, just_maps)
         items = []
