@@ -30,9 +30,13 @@ Format of the XML file is:
 
 EXPORT_ENC_PASSWORD = False
 
+EMAIL_MAX_LENGTH = 75
+NAME_MAX_LENGTH = 30
+
 import sys
 import time
 import os
+import random
 import xml.dom.minidom
 from xml.dom.minidom import getDOMImplementation
 
@@ -49,6 +53,38 @@ from Sycamore import user
 
 xml = getDOMImplementation()
 dummy_name = "attrs"
+
+EMAILS = []
+USERNAMES = []
+
+def get_truncated_username(username):
+    candidate = username[:30]
+    if candidate.lower() in USERNAMES:
+        candidate = candidate[:26] + str(random.randint(1000, 9999))
+        candidate = get_truncated_username(candidate)
+
+    USERNAMES.append(candidate.lower())
+
+    if candidate != username:
+        print("warning: username %s changed to %s" % (username, candidate))
+    return candidate
+
+
+def email_unique(email):
+    email = email.strip().lower()
+    if email in EMAILS:
+        print("warning: duplicate email %s" % email)
+        return False
+    EMAILS.append(email)
+    return True
+
+
+def get_email_for_user(username):
+    while True:
+        candidate = 'fixme+%s-%d@example.org' % (username, random.randint(1000,9999))
+        if email_unique(candidate):
+            return candidate
+
 
 def generate_attributes(dict):
     """
@@ -80,6 +116,10 @@ def users(request, f):
     for name, email, enc_password, disabled in request.cursor.fetchall():
         if not EXPORT_ENC_PASSWORD:
             enc_password = ''
+        if len(name) >= NAME_MAX_LENGTH:
+            name = get_truncated_username(name)
+        if email == '' or not email_unique(email) or len(email) >= EMAIL_MAX_LENGTH:
+            email = get_email_for_user(name)
         d = {
             'name': name,
             'email': email,
