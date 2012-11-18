@@ -190,12 +190,15 @@ def start_pages(request, file):
     file.write('<pages>\n')
 
 def get_page_text(page):
+    # Return XML page text with all control characters (except \n)
+    # removed.
     filter_dict = dict.fromkeys(range(32))
     filter_dict[10] = 10
 
     doc = xml.createDocument(None, "text", None)
     root = doc.documentElement
-    text = doc.createTextNode(page.get_raw_body(fresh=True).translate(filter_dict))
+    rawbody = unicode(page.get_raw_body(fresh=True))
+    text = doc.createTextNode(rawbody.translate(filter_dict))
     root.appendChild(text)
     return (root.toxml().encode(config.charset) + '\n')
 
