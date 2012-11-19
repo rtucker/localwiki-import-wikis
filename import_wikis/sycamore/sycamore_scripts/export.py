@@ -98,6 +98,7 @@ import xml.dom.minidom
 from xml.dom.minidom import getDOMImplementation
 from base64 import b64encode
 from copy import copy
+from xml.sax.saxutils import escape
 
 import __init__ # woo hackmagic
 __directory__ = os.path.dirname(__file__)
@@ -189,9 +190,15 @@ def start_pages(request, file):
     file.write('<pages>\n')
 
 def get_page_text(page):
+    # Return XML page text with all control characters (except \n)
+    # removed.
+    filter_dict = dict.fromkeys(range(32))
+    filter_dict[10] = 10
+
     doc = xml.createDocument(None, "text", None)
     root = doc.documentElement
-    text = doc.createTextNode(page.get_raw_body(fresh=True))
+    rawbody = unicode(page.get_raw_body(fresh=True))
+    text = doc.createTextNode(rawbody.translate(filter_dict))
     root.appendChild(text)
     return (root.toxml().encode(config.charset) + '\n')
 
@@ -468,7 +475,7 @@ def events(request, file):
         text = result[6]
 
         file.write('<event %s>' % generate_attributes(d))
-        file.write(text.encode(config.charset))
+        file.write(escape(text.encode(config.charset)))
         file.write('</event>\n')
         
     end_events(request, file)
@@ -654,7 +661,7 @@ if __name__ == '__main__':
     grab_level = raw_input().strip()
     if grab_level == '2':
         command_line = False
-        request.user = user.User(req)
+        req.user = user.User(req)
 
     export(req, wiki_name=wiki_name, just_pages=just_pages, just_files=just_files, just_maps=just_maps)
     req.db_disconnect()

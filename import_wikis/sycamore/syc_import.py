@@ -21,6 +21,7 @@ To use:
      have an XML file in the Sycamore/ directory containing a Sycamore XML export.
   6. From your Sycamore/ directory, run python user_export.py.  You'll now have an XML
      file in the Sycamore/ directory containing a Sycamore XML user export.
+       Note: Change EXPORT_ENC_PASSWORD = True if you want to export passwords, too
   7. Run localwiki-manage runscript syc_import --script-args=/path/to/the/dump.xml /path/to/the/user.dump.xml
 
 You'll then have an import of the old Sycamore site!  User accounts are moved over
@@ -1272,7 +1273,10 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
                     # Save historical version - with editor info, etc
                     m_h = m.versions.most_recent()
 
-                    edit_time_epoch = float(element.attrib['created_time'])
+                    try:
+                        edit_time_epoch = float(element.attrib['created_time'])
+                    except ValueError:
+                        edit_time_epoch = -1
                     username_edited = element.attrib['created_by']
                     history_user_ip = element.attrib['created_by_ip']
                     if not history_user_ip.strip():
@@ -1450,10 +1454,12 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
 
         if not exclude_pages:
             max_jobs = 20
+            process_every = 40
         else:
             # File imports use way more memory, so we send less elements
             # to the process.
             max_jobs = 4
+            process_every = 20
 
         import_process(items, just_pages, exclude_pages, just_maps)
         items = []
@@ -1593,7 +1599,7 @@ def fix_historical_ids():
     """
     print "Fixing historical ids"
     id_map = {}
-    for ph in Page.versions.all().defer('content'):
+    for ph in Page.versions.all().defer('content').iterator():
         if ph.slug in id_map:
             ph.id = id_map[ph.slug]
             ph.save()
@@ -1605,7 +1611,7 @@ def fix_historical_ids():
             ph.save()
 
     id_map = {}
-    for ph in PageFile.versions.all().defer('content'):
+    for ph in PageFile.versions.all().iterator():
         if (ph.name, ph.slug) in id_map:
             ph.id = id_map[(ph.name, ph.slug)]
             ph.save()
