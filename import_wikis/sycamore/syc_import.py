@@ -613,7 +613,7 @@ class Formatter(sycamore_HTMLFormatter):
 
     def process_footnote_macro(self, macro_obj, name, args):
         if not args or not args.strip():
-            return
+            return ""
         args = args.strip()
         html = strip_outer_para(render_wikitext(args, strong=False))
         if not hasattr(self, '_footnotes'):
