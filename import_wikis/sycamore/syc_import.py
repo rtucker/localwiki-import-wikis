@@ -1463,7 +1463,7 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
             continue
 
         parent = element.getparent()
-        parent_parent = parent.getparent() if parent else None
+        parent_parent = parent.getparent() if (parent is not None) else None
         items.append((copy.deepcopy(element), copy.deepcopy(parent), copy.deepcopy(parent_parent)))
 
         if not exclude_pages:
