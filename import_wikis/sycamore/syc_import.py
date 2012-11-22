@@ -607,7 +607,7 @@ class Formatter(sycamore_HTMLFormatter):
         return '<a href="mailto:%s">%s</a>' % (email, email)
 
     def process_address_macro(self, macro_obj, name, args):
-        address = render_wikitext(args, strong=False, page_slug=self.page_slug)
+        address = render_wikitext(args.strip('"'), strong=False, page_slug=self.page_slug)
         # remove surrounding <p> tag
         return '\n'.join(address.strip().split('\n')[1:-1])
 
