@@ -1074,7 +1074,8 @@ def render_wikitext(text, strong=True, page_slug=None):
     try:
       wiki_html = sycamore_wikifyString(text, request, page,
           formatter=formatter, strong=strong, doCache=False)
-    except:
+    except Exception, e:
+      print "\tERROR render_wikitext (page %s): %s" % (page_slug, e)
       return ''
 
     if strong and hasattr(formatter, '_footnotes'):
@@ -1189,7 +1190,7 @@ def create_page_version(version_elem, text_elem):
     	to_page = line[line.find('#redirect')+10:]
         html = '<p>This version of the page was a redirect.  See <a href="%s">%s</a>.</p>' % (to_page, to_page)
     if not html or not html.strip():
-        print "\t ERROR empty page %s" % name
+        print "\t ERROR empty page version %s (%s)" % (name, history_date)
         return
 
     # Create a dummy Page object to get the correct cleaning behavior
@@ -1436,16 +1437,20 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
         except StopIteration:
             parsing = False
         except Exception, s:
-           print "ERROR", s
+            print "\t ERROR import_from_export_file at", n, s
     
         n += 1
-        
+
+        if n % 1000 == 0:
+            print "Processed", n
+
         for p in to_start:
             # Clean up address space before fork()
             gc.collect()
             p.start()
             jobs.append(p)
             to_start.remove(p)
+            print "Starting job", len(jobs)
 
         while len(jobs) >= max_jobs:
             for p in jobs:
@@ -1498,6 +1503,7 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
         p.start()
         jobs.append(p)
         to_start.remove(p)
+        print "Starting job", len(jobs)
     for p in jobs:
         p.join()
 
