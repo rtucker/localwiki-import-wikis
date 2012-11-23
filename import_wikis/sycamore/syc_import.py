@@ -565,7 +565,7 @@ class Formatter(sycamore_HTMLFormatter):
         image_name, caption, is_thumbnail, size, alignment, has_border = \
             getArguments(args)
 
-        url_image_name = urllib.quote(image_name)
+        url_image_name = urllib.quote(image_name.encode('utf-8'))
         photohandle = flickr.Photo(image_name)
         licensename = licenses_getInfo(photohandle.license)
         oklicenses = ['1','2','3','4','5','6','7','8']
@@ -715,7 +715,10 @@ class Formatter(sycamore_HTMLFormatter):
             'flickr': self.process_flickr_macro,
         }
         if name.lower() in macro_processors:
-            return macro_processors[name.lower()](macro_obj, name, args)
+            try:
+                return macro_processors[name.lower()](macro_obj, name, args)
+            except Exception, e:
+                print "\t ERROR failed macro processing on", name, args
         return ''
 
     def pagelink(self, pagename, text=None, **kw):
