@@ -717,7 +717,7 @@ class Formatter(sycamore_HTMLFormatter):
             try:
                 return macro_processors[name.lower()](macro_obj, name, args)
             except Exception, e:
-                print "\t ERROR failed macro processing on", name, args
+                print "\t ERROR failed macro processing on", smart_str(name), args
         return ''
 
     def pagelink(self, pagename, text=None, **kw):
@@ -1185,7 +1185,7 @@ def create_page(page_elem, text_elem, redirect_queue=None):
         wikitext = reformat_wikitext(wikitext)
     except Exception, e:
         # render error
-        print "\t ERROR rendering wikitext for %s (%s)" % (name, e)
+        print "\t ERROR rendering wikitext for %s (%s)" % (smart_str(name), e)
         return
     html = render_wikitext(wikitext, page_slug=slugify(name))
     if wikitext and wikitext.strip().lower().startswith('#redirect'):
@@ -1196,17 +1196,17 @@ def create_page(page_elem, text_elem, redirect_queue=None):
         if redirect_queue is not None:
             redirect_queue.put((from_page, to_page))
             # skip page creation
-            print "\tQueued page redirect %s -> %s" % (from_page, to_page)
+            print "\tQueued page redirect %s -> %s" % (smart_str(from_page), smart_str(to_page))
         return
     if not html or not html.strip():
         if page_elem.attrib.get('edit_type', '') is not 'DELETE':
-            print "\t ERROR empty page %s" % name
+            print "\t ERROR empty page %s" % smart_str(name)
         return
     p = Page(name=name, content=html)
     try:
         p.clean_fields()
     except Exception, e:
-        print "\t ERROR importing HTML for %s (%s)" % (name, e)
+        print "\t ERROR importing HTML for %s (%s)" % (smart_str(name), e)
         return
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
@@ -1265,7 +1265,7 @@ def create_page_version(version_elem, text_elem):
         html = render_wikitext(wikitext, page_slug=slugify(name))
     except Exception, e:
         # render error
-        print "\t ERROR rendering wikitext for %s (%s)" % (name, e)
+        print "\t ERROR rendering wikitext for %s (%s)" % (smart_str(name), e)
         return
     if wikitext and wikitext.strip().startswith('#redirect'):
         # Page is a redirect
@@ -1273,7 +1273,7 @@ def create_page_version(version_elem, text_elem):
     	to_page = line[line.find('#redirect')+10:]
         html = '<p>This version of the page was a redirect.  See <a href="%s">%s</a>.</p>' % (to_page, to_page)
     if not html or not html.strip():
-        print "\t ERROR empty page version %s (%s)" % (name, history_date)
+        print "\t ERROR empty page version %s (%s)" % (smart_str(name), history_date)
         return
 
     # Create a dummy Page object to get the correct cleaning behavior
@@ -1281,7 +1281,7 @@ def create_page_version(version_elem, text_elem):
     try:
         p.clean_fields()
     except Exception, e:
-        print "\t ERROR importing HTML for %s (%s)" % (name, e)
+        print "\t ERROR importing HTML for %s (%s)" % (smart_str(name), e)
         return
     html = tidy_html(p.content)
 
@@ -1297,7 +1297,7 @@ def create_page_version(version_elem, text_elem):
         history_user_ip=history_user_ip
     )
     p_h.save()
-    print "\tImported historical page %s at %s" % (name, history_date)
+    print "\tImported historical page %s at %s" % (smart_str(name), history_date)
 
 
 def is_image(filename):
