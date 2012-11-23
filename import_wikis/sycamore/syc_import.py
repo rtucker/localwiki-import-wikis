@@ -1193,7 +1193,7 @@ def create_page(page_elem, text_elem):
     html = render_wikitext(wikitext, page_slug=slugify(name))
     if wikitext and wikitext.strip().lower().startswith('#redirect'):
         # Page is a redirect
-        line = wikitext.strip()
+        line = wikitext.split('\n')[0].strip()
     	from_page = name
     	to_page = line[line.find('#redirect')+10:]
         redirects.append((from_page, to_page))
