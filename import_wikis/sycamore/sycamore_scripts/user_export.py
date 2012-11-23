@@ -38,6 +38,8 @@ import time
 import os
 import random
 import xml.dom.minidom
+import binascii
+import base64
 from xml.dom.minidom import getDOMImplementation
 
 import __init__ # woo hackmagic
@@ -116,6 +118,9 @@ def users(request, f):
     for name, email, enc_password, disabled in request.cursor.fetchall():
         if not EXPORT_ENC_PASSWORD:
             enc_password = ''
+        else:
+            if not enc_password.startswith('sha1$'):
+                enc_password = 'sha1$$' + binascii.hexlify(base64.decodestring(enc_password))
         if len(name) >= NAME_MAX_LENGTH:
             name = get_truncated_username(name)
         if email == '' or not email_unique(email) or len(email) >= EMAIL_MAX_LENGTH:
