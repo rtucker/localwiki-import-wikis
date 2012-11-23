@@ -109,13 +109,13 @@ def generate_attributes(dict):
 def users(request, f):
     request.cursor.execute(
         """SELECT users.propercased_name, users.email, enc_password,
-                  users.disabled
+                  users.disabled, users.join_date
            FROM users, userWikiInfo
            WHERE users.name !='' and (userWikiInfo.edit_count > 0 or userWikiInfo.file_count > 0) and
                  users.name=userWikiInfo.user_name and
                  userWikiInfo.wiki_id=%(wiki_id)s""",
         {'wiki_id':request.config.wiki_id})
-    for name, email, enc_password, disabled in request.cursor.fetchall():
+    for name, email, enc_password, disabled, join_date in request.cursor.fetchall():
         if not EXPORT_ENC_PASSWORD:
             enc_password = ''
         else:
@@ -130,6 +130,7 @@ def users(request, f):
             'email': email,
             'enc_password': enc_password,
             'disabled': disabled,
+            'join_date': join_date,
         }
         f.write('<user %s/>\n' % generate_attributes(d))
 

@@ -1318,14 +1318,24 @@ def process_user_element(element):
     if parent.tag == 'users' and element.tag == 'user':
         username = element.attrib['name']
         email = element.attrib['email']
+        enc_password = element.attrib.get('enc_password', '!')
         disabled = element.attrib['disabled']
+        join_date = element.attrib.get('join_date')
         if disabled == '1':
             return
+        if join_date is '':
+            join_dttm = datetime.datetime.now()
+        else:
+            join_dttm = datetime.datetime.fromtimestamp(float(join_date))
         if User.objects.filter(email=email) or User.objects.filter(username=username):
             # skip import if user already exists
             return
-        User.objects.create_user(username, email)
-        print 'created user: %s %s' % (username, email)
+        u = User.objects.create_user(username, email)
+        u.date_joined = join_dttm
+        if enc_password is not '':
+            u.password = enc_password
+        u.save()
+        print 'created user: %s %s' % (smart_str(username), smart_str(email))
 
 def process_element(element, parent, parent_tag, grandparent_tag, just_pages, exclude_pages, just_maps, redirect_queue):
     from django.contrib.auth.models import User
