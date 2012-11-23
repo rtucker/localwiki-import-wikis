@@ -1755,6 +1755,8 @@ def run(*args, **kwargs):
     import_from_export_file(f, just_pages=True)
     f.close()
     fix_historical_ids()
+    process_redirects()
+    fix_historical_ids()
     f = open(map_filename, 'r')
     import_from_export_file(f, just_maps=True)
     f.close()
