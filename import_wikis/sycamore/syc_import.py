@@ -1610,8 +1610,8 @@ def users_import_from_export_file(f):
 def clear_out_everything():
     from django.db import connection
     from django.contrib.auth.models import User
-    #for p in User.objects.all():
-    #    p.delete()
+    from users.models import UserProfile
+
     cursor = connection.cursor()
     print 'Bulk clearing out all map data'
     cursor.execute('DELETE from maps_mapdata')
@@ -1654,6 +1654,13 @@ def clear_out_everything():
 
     print 'Committing...'
     transaction.commit_unless_managed()
+
+    print 'Deleting user profiles...'
+    UserProfile.objects.filter(user__is_superuser=False).delete()
+
+    print 'Deleting users...'
+    User.objects.filter(is_superuser=False).delete()
+
     print 'Done clearing out'
 
 
