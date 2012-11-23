@@ -43,7 +43,8 @@ Then run syc_import with:
   localwiki-manage runscript syc_import --script-args=/path/to/the/page_dump.xml /path/to/the/user.dump.xml /path/to/the/files_dump.xml /path/to/the/map_dump.xml
 """
 
-from multiprocessing import Process
+from multiprocessing import Process, JoinableQueue
+from Queue import Empty, Full
 
 import os
 import sys
@@ -64,6 +65,7 @@ from haystack import site as haystack_site
 from django.contrib.gis.geos import Point, MultiPoint
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.utils.encoding import smart_str
 
 #################################
 # CHANGE THIS
@@ -77,9 +79,6 @@ from Sycamore.formatter.base import FormatterBase
 from Sycamore import wikiutil
 from Sycamore.parser.wiki_simple import Parser as sycamore_SimpleParser
 from Sycamore.parser.wiki import Parser as sycamore_Parser
-
-redirects = []
-
 
 def replace_baseline_table_color(hex):
     if hex.lower() == '#e0e0ff':
@@ -1170,7 +1169,7 @@ def render_wikitext(text, strong=True, page_slug=None):
     return wiki_html
 
 
-def create_page(page_elem, text_elem):
+def create_page(page_elem, text_elem, redirect_queue=None):
     # We import a page in a few different phases.
     # We first pull in the raw wiki text, then we render it using the
     # Sycamore parser and a modified Sycamore formatter (which does the HTML
@@ -1178,8 +1177,6 @@ def create_page(page_elem, text_elem):
     # HTML is generated (like fixing empty paragraphs), while other
     # fixes are easier to do by modifying our custom Formatter.  So we
     # mix and match to get the best result.
-    global redirects
-
     name = normalize_pagename(page_elem.attrib['propercased_name'])
     if Page.objects.filter(slug=slugify(name)).exists():
         return
@@ -1196,12 +1193,14 @@ def create_page(page_elem, text_elem):
         line = wikitext.split('\n')[0].strip()
     	from_page = name
     	to_page = line[line.find('#redirect')+10:]
-        redirects.append((from_page, to_page))
-        # skip page creation
-        print "\tQueued page redirect %s" % name
+        if redirect_queue is not None:
+            redirect_queue.put((from_page, to_page))
+            # skip page creation
+            print "\tQueued page redirect %s -> %s" % (from_page, to_page)
         return
     if not html or not html.strip():
-        print "\t ERROR empty page %s" % name
+        if page_elem.attrib.get('edit_type', '') is not 'DELETE':
+            print "\t ERROR empty page %s" % name
         return
     p = Page(name=name, content=html)
     try:
@@ -1211,7 +1210,7 @@ def create_page(page_elem, text_elem):
         return
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
-    print "\tImported page %s" % name
+    print "\tImported page %s" % smart_str(name)
 
 
 def convert_edit_type(s):
@@ -1253,7 +1252,7 @@ def create_page_version(version_elem, text_elem):
     history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
 
     # If we already have a version exactly like this, skip
-    if Page.versions.filter(name=name, history_comment=history_comment, history_type=history_type).exists():
+    if Page.versions.filter(name=name, history_comment=history_comment, history_date=history_date).exists():
         return
 
     # Set id to 0 because we create historical versions in
@@ -1328,22 +1327,22 @@ def process_user_element(element):
         User.objects.create_user(username, email)
         print 'created user: %s %s' % (username, email)
 
-def process_element(element, parent, parent_parent, just_pages, exclude_pages, just_maps):
+def process_element(element, parent, parent_tag, grandparent_tag, just_pages, exclude_pages, just_maps, redirect_queue):
     from django.contrib.auth.models import User
-    if parent is None:
+    if parent_tag is None:
         return
 
     if not just_maps and not exclude_pages:
-        if parent.tag == 'page':
+        if parent_tag == 'page':
             if element.tag == 'text':
-                create_page(parent, element)
-        elif parent.tag == 'version' and element.tag == 'text' and parent_parent.tag == 'page':
+                create_page(parent, element, redirect_queue)
+        elif parent_tag == 'version' and element.tag == 'text' and grandparent_tag == 'page':
             create_page_version(parent, element)
     if just_pages:
         return
-    if parent.tag == 'current' or parent.tag == 'old':
+    if parent_tag == 'current' or parent_tag == 'old':
         if element.tag == 'point':
-            if parent.tag == 'current':
+            if parent_tag == 'current':
                 try:
                     p = Page.objects.get(slug=slugify(normalize_pagename(element.attrib['pagename'])))
                 except Page.DoesNotExist:
@@ -1391,7 +1390,7 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
                     m_h.history_user_ip = history_user_ip
                     m_h.save()
 
-            elif parent.tag == 'old':
+            elif parent_tag == 'old':
                 # Skip import of historical map point data - not really
                 # interesting and it'd be weird because the points are
                 # kept separately in the XML dump.  People weren't
@@ -1400,7 +1399,7 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
                 return
     if just_maps:
         return
-    if parent.tag == 'files':
+    if parent_tag == 'files':
         # Current version of a file for a page.
         if (element.tag == 'file' and
             element.attrib.get('deleted', 'False') != 'True'):
@@ -1496,23 +1495,36 @@ def process_element(element, parent, parent_parent, just_pages, exclude_pages, j
             print "\timported historical file %s on page %s" % (filename.encode('utf-8'), normalize_pagename(element.attrib.get('attached_to_pagename')).encode('utf-8'))
 
 
-@transaction.commit_on_success
-def import_process(items, just_pages, exclude_pages, just_maps):
+def import_process(items, just_pages, exclude_pages, just_maps, redirect_queue=None):
     from django.db import close_connection, connection
     close_connection()
     connection.connection = None
 
-    for element, parent, parent_parent in items:
-        process_element(element, parent, parent_parent, just_pages, exclude_pages, just_maps)
+    running = True
+    while running:
+        try:
+            item = items.get(timeout=10)
+            element_str, parent_str, parent_tag, grandparent_tag = item
+            if parent_str is not None:
+                parent = etree.XML(parent_str)
+            else:
+                parent = None
+            element = etree.XML(element_str)
+            with transaction.commit_on_success():
+                process_element(element, parent, parent_tag, grandparent_tag, just_pages, exclude_pages, just_maps, redirect_queue)
+            items.task_done()
+        except Empty:
+            print "subprocess got empty"
+            running = False
 
-
-def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False):
+def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False, redirect_queue=None):
     jobs = []
     to_start = []
-    items = []
-    max_jobs = 10
+    items = JoinableQueue()
     n = 0
     parsing = True
+
+    max_jobs = 4
 
     parser = etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True)
     while parsing:
@@ -1526,46 +1538,38 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
         n += 1
 
         if n % 1000 == 0:
-            print "Processed", n
+            print datetime.datetime.now(), "Parsed %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
+            for job in jobs:
+                if not job.is_alive():
+                    print "Reaping dead process", job
+                    jobs.remove(job)
 
-        for p in to_start:
-            # Clean up address space before fork()
-            gc.collect()
-            p.start()
-            jobs.append(p)
-            to_start.remove(p)
-            print "Starting job", len(jobs)
-
-        while len(jobs) >= max_jobs:
-            for p in jobs:
-                p.join(0.05)
-                if not p.is_alive():
-                    jobs.remove(p)
-                    break
-        
         if event != 'end':
             continue
 
-        parent = element.getparent()
-        parent_parent = parent.getparent() if (parent is not None) else None
-        items.append((copy.deepcopy(element), copy.deepcopy(parent), copy.deepcopy(parent_parent)))
-
-        if not exclude_pages:
-            max_jobs = 20
-            process_every = 40
-        else:
-            # File imports use way more memory, so we send less elements
-            # to the process.
-            max_jobs = 4
-            process_every = 20
-
-        import_process(items, just_pages, exclude_pages, just_maps)
-        items = []
-        if len(items) > process_every:
-            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
-            p.daemon = True
-            to_start.append(p)
-            items = []
+        if element.tag in ['text']:
+            parent = element.getparent()
+            parent_tag = parent.tag if (parent is not None) else None
+            parent_parent = parent.getparent() if (parent is not None) else None
+            grandparent_tag = parent_parent.tag if (parent_parent is not None) else None
+            item = (etree.tostring(element), etree.tostring(parent), parent_tag, grandparent_tag)
+            items.put(item)
+        elif element.tag in ['point']:
+            parent = element.getparent()
+            parent_tag = parent.tag if (parent is not None) else None
+            parent_parent = parent.getparent() if (parent is not None) else None
+            grandparent_tag = parent_parent.tag if (parent_parent is not None) else None
+            item = (etree.tostring(element), None, parent_tag, grandparent_tag)
+            items.put(item)
+        elif element.tag in ['file']:
+            # These suckers are huge.  Like, we're talking Maine Coon size
+            # Don't bother parallelizing 'cuz it's just gonna be all tears
+            from django.db import close_connection, connection
+            close_connection()
+            connection.connection = None
+            parent = element.getparent()
+            parent_tag = parent.tag if (parent is not None) else None
+            process_element(element, parent, parent_tag, None, just_pages, exclude_pages, just_maps, redirect_queue)
 
         # Remove all previous siblings to keep the in-memory tree small.
         element.clear()
@@ -1577,20 +1581,14 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
 
         gc.collect()
 
+        if len(jobs) < max_jobs and items.qsize() > len(jobs):
+            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps, redirect_queue,))
+            p.daemon = True
+            p.start()
+            jobs.append(p)
 
-    gc.collect()
-    p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps))
-    p.daemon = True
-    to_start.append(p)
-
-    for p in to_start:
-        p.start()
-        jobs.append(p)
-        to_start.remove(p)
-        print "Starting job", len(jobs)
-    for p in jobs:
-        p.join()
-
+    print datetime.datetime.now(), "DONE PARSING at Parsed %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
+    items.join()
 
 def users_import_from_export_file(f):
     print 'importing users'
@@ -1654,11 +1652,12 @@ def clear_out_everything():
     cursor.execute('DELETE from pages_page_hist')
     print 'All page history deleted'
 
+    print 'Committing...'
     transaction.commit_unless_managed()
     print 'Done clearing out'
 
 
-def process_redirects():
+def process_redirects(redirect_queue):
     # We create the Redirects here.  We don't try and port over the
     # version information for the formerly-page-based redirects, as that
     # is 1) not very important 2) preserved via the page content, in
@@ -1666,7 +1665,6 @@ def process_redirects():
     # versions will note that the page used to be a redirect in the page
     # history.
     from django.contrib.auth.models import User
-    global redirects
 
     try:
         u = User.objects.get(username="LocalWikiRobot")
@@ -1675,7 +1673,12 @@ def process_redirects():
                  email='editrobot@localwiki.org')
         u.save()
 
-    for from_pagename, to_pagename in redirects:
+    while True:
+        try:
+            from_pagename, to_pagename = redirect_queue.get(timeout=10)
+        except Empty:
+            return
+
         try:
             to_page = Page.objects.get(name=to_pagename)
         except Page.DoesNotExist:
@@ -1685,9 +1688,11 @@ def process_redirects():
 
         if slugify(from_pagename) == to_page.slug:
             continue
-        if not Redirect.objects.filter(source=slugify(from_pagename)):
-          r = Redirect(source=slugify(from_pagename), destination=to_page)
-          r.save(user=u, comment="Automated edit. Creating redirect.")
+        if not Redirect.objects.filter(source=slugify(from_pagename)).exists():
+            r = Redirect(source=slugify(from_pagename), destination=to_page)
+            r.save(user=u, comment="Automated edit. Creating redirect.",
+                   date=to_page.versions.latest('history_date'))
+        redirect_queue.task_done()
 
 
 def fix_historical_ids():
@@ -1740,23 +1745,29 @@ def run(*args, **kwargs):
     if len(args) == 4:
         file_filename = args[2]
         map_filename = args[3]
-         
+
+    redirect_queue = JoinableQueue()
 
     turn_off_search()
     clear_out_everything()
+
     f = open(user_filename, 'r')
     users_import_from_export_file(f)
     f.close()
+    print 'importing files'
     f = open(file_filename, 'r')
     import_from_export_file(f, exclude_pages=True)
     fix_historical_ids()
     f.close()
+    print 'importing pages'
     f = open(page_filename, 'r')
-    import_from_export_file(f, just_pages=True)
+    import_from_export_file(f, just_pages=True, redirect_queue=redirect_queue)
     f.close()
     fix_historical_ids()
-    process_redirects()
+    print 'processing redirects'
+    process_redirects(redirect_queue)
     fix_historical_ids()
+    print 'importing map points'
     f = open(map_filename, 'r')
     import_from_export_file(f, just_maps=True)
     f.close()
