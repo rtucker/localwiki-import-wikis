@@ -1097,7 +1097,7 @@ def create_page(page_elem, text_elem):
     global redirects
 
     name = normalize_pagename(page_elem.attrib['propercased_name'])
-    if Page.objects.filter(slug=slugify(name)):
+    if Page.objects.filter(slug=slugify(name)).exists():
         return
     wikitext = text_elem.text
     try:
