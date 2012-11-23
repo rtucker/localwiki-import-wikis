@@ -555,6 +555,86 @@ class Formatter(sycamore_HTMLFormatter):
                 '</span>' % attrs)
         return html
 
+    def process_flickr_macro(self, macro_obj, name, args):
+        try:
+            from Sycamore.macro.flickr import getArguments, licenses_getInfo
+            from Sycamore.support import flickr
+        except ImportError:
+            return ''
+
+        image_name, caption, is_thumbnail, size, alignment, has_border = \
+            getArguments(args)
+
+        url_image_name = urllib.quote(image_name)
+        photohandle = flickr.Photo(image_name)
+        licensename = licenses_getInfo(photohandle.license)
+        oklicenses = ['1','2','3','4','5','6','7','8']
+
+        if (photohandle.license not in oklicenses) or (not photohandle.ispublic):
+            return ("<!-- Don't have permissions for Flickr image here.\n"
+                    "        Image_name %s\n"
+                    "        Caption %s\n"
+                    "        Is_Thumbnail %s\n"
+                    "        Size %s\n"
+                    "        Alignment %s\n"
+                    "        Has_Border %s -->\n") % getArguments(args)
+
+        ownername = photohandle.owner.username
+        imageurl = photohandle.getURL(urlType='source', size=size)
+        linkurl = photohandle.getURL(urlType='url', size=size)
+
+        if caption:
+            caption += ' (by Flickr user %s: [%s license info], [%s link to original])' % (
+                        ownername, licensename[1], linkurl)
+
+        if line_has_just_macro(macro_obj, args, macro_obj.formatter):
+            macro_obj.parser.inhibit_br = 2
+            if next_line_has_just_macro(macro_obj, args, macro_obj.formatter):
+                macro_obj.parser.inhibit_p = 1
+
+        attrs = {
+            'total_style': '',
+            'img_style': '',
+            'caption_html': '',
+            'img_frame_classes': 'image_frame',
+            'img_src': imageurl,
+        }
+        width, height = None, None
+        total_style_value, img_style_value = '', ''
+
+        sizedata = photohandle.getSizes()
+        for i in sizedata:
+            if i['label'].lower() == size.lower():
+                width, height = i['width'], i['height']
+
+        img_style_value += 'width: %spx; height:%spx;' % (width, height)
+
+        if has_border:
+            attrs['img_frame_classes'] += " image_frame_border"
+
+        if alignment:
+            attrs['img_frame_classes'] += " image_%s" % alignment
+
+        if total_style_value:
+            attrs['total_style'] = 'style="%s"' % total_style_value
+        if img_style_value:
+            attrs['img_style'] = 'style="%s"' % img_style_value
+        if caption:
+            caption_html = render_wikitext(caption, strong=False, page_slug=self.page_slug)
+            # remove surrounding <p> tag
+            caption_html = '\n'.join(caption_html.strip().split('\n')[1:-1])
+            caption_style = ''
+            if width:
+                caption_style = ' style="width:%spx;"' % width
+            attrs['caption_html'] = '<span class="image_caption"%s>%s</span>' \
+                % (caption_style, caption_html)
+
+        html = ('<span %(total_style)s class="%(img_frame_classes)s">'
+                  '<img src="%(img_src)s" %(img_style)s/>'
+                  '%(caption_html)s'
+                '</span>' % attrs)
+        return html
+
     def process_comments_macro(self, macro_obj, name, args):
         title = (args and args.strip()) or "Comments"
         return "<h2>%s</h2>" % title
@@ -632,6 +712,7 @@ class Formatter(sycamore_HTMLFormatter):
             'address': self.process_address_macro,
             'mailto': self.process_mailto_macro,
             'footnote': self.process_footnote_macro,
+            'flickr': self.process_flickr_macro,
         }
         if name.lower() in macro_processors:
             return macro_processors[name.lower()](macro_obj, name, args)
