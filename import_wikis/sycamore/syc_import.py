@@ -1210,7 +1210,7 @@ def create_page(page_elem, text_elem, redirect_queue=None):
         return
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
-    print "\tImported page %s" % smart_str(name)
+    #print "\tImported page %s" % smart_str(name)
 
 
 def convert_edit_type(s):
@@ -1297,7 +1297,7 @@ def create_page_version(version_elem, text_elem):
         history_user_ip=history_user_ip
     )
     p_h.save()
-    print "\tImported historical page %s at %s" % (smart_str(name), history_date)
+    #print "\tImported historical page %s at %s" % (smart_str(name), history_date)
 
 
 def is_image(filename):
@@ -1526,7 +1526,7 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
 
     max_jobs = 4
 
-    parser = etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True)
+    parser = etree.iterparse(f, events=("end",), encoding='utf-8', huge_tree=True)
     while parsing:
         try:
             event, element = parser.next()
@@ -1535,10 +1535,8 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
         except Exception, s:
             print "\t ERROR import_from_export_file at", n, s
     
-        n += 1
-
         if n % 1000 == 0:
-            print datetime.datetime.now(), "Parsed %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
+            print datetime.datetime.now(), "element %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
             for job in jobs:
                 if not job.is_alive():
                     print "Reaping dead process", job
@@ -1546,6 +1544,8 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
 
         if event != 'end':
             continue
+
+        n += 1
 
         if element.tag in ['text']:
             parent = element.getparent()
@@ -1587,7 +1587,7 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
             p.start()
             jobs.append(p)
 
-    print datetime.datetime.now(), "DONE PARSING at Parsed %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
+    print datetime.datetime.now(), "DONE PARSING at element %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
     items.join()
 
 def users_import_from_export_file(f):
