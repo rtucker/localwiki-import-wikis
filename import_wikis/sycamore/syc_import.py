@@ -50,6 +50,7 @@ import os
 import sys
 import site
 import gc
+import time
 
 import re
 import datetime
@@ -1583,7 +1584,7 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
 
     max_jobs = 4
 
-    parser = etree.iterparse(f, events=("end",), encoding='utf-8', huge_tree=True)
+    parser = etree.iterparse(f, events=("start", "end",), encoding='utf-8', huge_tree=True)
     while parsing:
         try:
             event, element = parser.next()
@@ -1591,20 +1592,36 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
             parsing = False
         except Exception, s:
             print "\t ERROR import_from_export_file at", n, s
-    
-        if n % 1000 == 0:
-            print datetime.datetime.now(), "element %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
-            for job in jobs:
-                if not job.is_alive():
-                    print "Reaping dead process", job
-                    jobs.remove(job)
 
         if event != 'end':
             continue
 
+        if n % 1000 == 0:
+            for job in jobs:
+                if not job.is_alive():
+                    print "Reaping dead process", job
+                    jobs.remove(job)
+            successes = failures = nones = 0
+            while True:
+                try:
+                    result, message = output_queue.get_nowait()
+                    output_queue.task_done()
+                except Empty:
+                    break
+                if result is False:
+                    print "\t" + message
+                    failures += 1
+                elif result is True:
+                    successes += 1
+                elif result is None:
+                    nones += 1
+
+            print datetime.datetime.now(), "element %d (this block: good: %d, bad: %d, no action: %d), task queue %d, redirect queue %d, workers %d" % (n, successes, failures, nones, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
+
         n += 1
 
         if element.tag in ['text']:
+            # The content of a page or a version.
             parent = element.getparent()
             parent_tag = parent.tag if (parent is not None) else None
             parent_parent = parent.getparent() if (parent is not None) else None
@@ -1612,6 +1629,7 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
             item = (etree.tostring(element), etree.tostring(parent), parent_tag, grandparent_tag)
             items.put(item)
         elif element.tag in ['point']:
+            # A point on a map.
             parent = element.getparent()
             parent_tag = parent.tag if (parent is not None) else None
             parent_parent = parent.getparent() if (parent is not None) else None
@@ -1644,9 +1662,27 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
             p.daemon = True
             p.start()
             jobs.append(p)
+            pass
 
     print datetime.datetime.now(), "DONE PARSING at element %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
-    items.join()
+
+    while True:
+        time.sleep(5)
+        for job in jobs:
+            if not job.is_alive():
+                print "Reaping dead process", job
+                jobs.remove(job)
+
+        if len(jobs) < max_jobs and items.qsize() > len(jobs):
+            # If we have work to do, start up a subprocess
+            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps, redirect_queue, output_queue,))
+            p.daemon = True
+            p.start()
+            jobs.append(p)
+        elif items.qsize() == 0:
+            print "done!"
+            break
+        print datetime.datetime.now(), "STILL PARSING, task queue %d, redirect queue %d, workers %d" % (items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
 
 def users_import_from_export_file(f):
     print 'importing users'
@@ -1766,6 +1802,12 @@ def fix_historical_ids():
     correct id for a historical version when we pushed in the historical
     versions. So we fix that here.
     """
+
+    # The database connection from this process may be stale
+    from django.db import close_connection, connection
+    close_connection()
+    connection.connection = None
+
     print "Fixing historical ids"
     id_map = {}
     for ph in Page.versions.all().defer('content').iterator():
