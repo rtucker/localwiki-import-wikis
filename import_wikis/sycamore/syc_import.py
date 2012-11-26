@@ -1197,14 +1197,13 @@ def create_page(page_elem, text_elem, redirect_queue=None):
     # mix and match to get the best result.
     name = normalize_pagename(page_elem.attrib['propercased_name'])
     if Page.objects.filter(slug=slugify(name)).exists():
-        return
+        return (None, "page already exists")
     wikitext = text_elem.text
     try:
         wikitext = reformat_wikitext(wikitext)
     except Exception, e:
         # render error
-        print "\t ERROR rendering wikitext for %s (%s)" % (smart_str(name), e)
-        return
+        return (False, "ERROR rendering wikitext for %s (%s)" % (smart_str(name), e))
     html = render_wikitext(wikitext, page_slug=slugify(name))
     if wikitext and wikitext.strip().lower().startswith('#redirect'):
         # Page is a redirect
@@ -1214,21 +1213,18 @@ def create_page(page_elem, text_elem, redirect_queue=None):
         if redirect_queue is not None:
             redirect_queue.put((from_page, to_page))
             # skip page creation
-            print "\tQueued page redirect %s -> %s" % (smart_str(from_page), smart_str(to_page))
-        return
+            return (True, "Queued page redirect %s -> %s" % (smart_str(from_page), smart_str(to_page)))
+        return (False, "no redirect queue available")
     if not html or not html.strip():
-        if page_elem.attrib.get('edit_type', '') is not 'DELETE':
-            print "\t ERROR empty page %s" % smart_str(name)
-        return
+        return (False, "ERROR empty page (probably deleted): %s" % smart_str(name))
     p = Page(name=name, content=html)
     try:
         p.clean_fields()
     except Exception, e:
-        print "\t ERROR importing HTML for %s (%s)" % (smart_str(name), e)
-        return
+        return (False, "ERROR importing HTML for %s (%s)" % (smart_str(name), e))
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
-    #print "\tImported page %s" % smart_str(name)
+    return (True, "Imported page %s" % smart_str(name))
 
 
 def convert_edit_type(s):
@@ -1271,7 +1267,7 @@ def create_page_version(version_elem, text_elem):
 
     # If we already have a version exactly like this, skip
     if Page.versions.filter(name=name, history_comment=history_comment, history_date=history_date).exists():
-        return
+        return (None, "version already exists")
 
     # Set id to 0 because we create historical versions in
     # parallel.  We fix this in fix_historical_ids().
@@ -1283,24 +1279,21 @@ def create_page_version(version_elem, text_elem):
         html = render_wikitext(wikitext, page_slug=slugify(name))
     except Exception, e:
         # render error
-        print "\t ERROR rendering wikitext for %s (%s)" % (smart_str(name), e)
-        return
+        return (False, "ERROR rendering wikitext for %s (%s)" % (smart_str(name), e))
     if wikitext and wikitext.strip().startswith('#redirect'):
         # Page is a redirect
         line = wikitext.strip()
     	to_page = line[line.find('#redirect')+10:]
         html = '<p>This version of the page was a redirect.  See <a href="%s">%s</a>.</p>' % (to_page, to_page)
     if not html or not html.strip():
-        print "\t ERROR empty page version %s (%s)" % (smart_str(name), history_date)
-        return
+        return (False, "ERROR empty page version: %s (%s)" % (smart_str(name), history_date))
 
     # Create a dummy Page object to get the correct cleaning behavior
     p = Page(name=name, content=html)
     try:
         p.clean_fields()
     except Exception, e:
-        print "\t ERROR importing HTML for %s (%s)" % (smart_str(name), e)
-        return
+        return (False, "ERROR importing HTML for %s (%s)" % (smart_str(name), e))
     html = tidy_html(p.content)
 
     p_h = Page.versions.model(
@@ -1315,7 +1308,7 @@ def create_page_version(version_elem, text_elem):
         history_user_ip=history_user_ip
     )
     p_h.save()
-    #print "\tImported historical page %s at %s" % (smart_str(name), history_date)
+    return (True, "Imported historical page %s at %s" % (smart_str(name), history_date))
 
 
 def is_image(filename):
@@ -1358,23 +1351,23 @@ def process_user_element(element):
 def process_element(element, parent, parent_tag, grandparent_tag, just_pages, exclude_pages, just_maps, redirect_queue):
     from django.contrib.auth.models import User
     if parent_tag is None:
-        return
+        return (None, 'parent_tag blank')
 
     if not just_maps and not exclude_pages:
         if parent_tag == 'page':
             if element.tag == 'text':
-                create_page(parent, element, redirect_queue)
+                return create_page(parent, element, redirect_queue)
         elif parent_tag == 'version' and element.tag == 'text' and grandparent_tag == 'page':
-            create_page_version(parent, element)
+            return create_page_version(parent, element)
     if just_pages:
-        return
+        return (None, 'not a page')
     if parent_tag == 'current' or parent_tag == 'old':
         if element.tag == 'point':
             if parent_tag == 'current':
                 try:
                     p = Page.objects.get(slug=slugify(normalize_pagename(element.attrib['pagename'])))
                 except Page.DoesNotExist:
-                    return
+                    return (False, "map point attached to nonexistent page %s" % smart_str(element.attrib['pagename']))
                 else:
                     mapdata = MapData.objects.filter(page=p)
                     x = float(element.attrib['x'])
@@ -1418,28 +1411,31 @@ def process_element(element, parent, parent_tag, grandparent_tag, just_pages, ex
                     m_h.history_user_ip = history_user_ip
                     m_h.save()
 
+                    return (True, "Map point %g %g created on %s" % (x, y, smart_str(element.attrib['pagename'])))
+
             elif parent_tag == 'old':
                 # Skip import of historical map point data - not really
                 # interesting and it'd be weird because the points are
                 # kept separately in the XML dump.  People weren't
                 # thinking about map data being independently versioned
                 # at the time.
-                return
+                return (None, "old map point data ignored")
+
     if just_maps:
-        return
+        return (None, 'not a map point')
     if parent_tag == 'files':
         # Current version of a file for a page.
         if (element.tag == 'file' and
             element.attrib.get('deleted', 'False') != 'True'):
             if not element.text:
-                return
+                return (None, "blank text element")
             filename = element.attrib.get('name')
             file_content = ContentFile(b64decode(element.text))
             slug = slugify(normalize_pagename(element.attrib.get('attached_to_pagename')))
             # XXX TODO generic files
             if is_image(filename):
-                if PageFile.objects.filter(name=filename, slug=slug):
-                    return
+                if PageFile.objects.filter(name=filename, slug=slug).exists():
+                    return (None, "file already exists")
                 pfile = PageFile(name=filename, slug=slug)
 
                 pfile.file.save(filename, file_content, save=False)
@@ -1470,12 +1466,13 @@ def process_element(element, parent, parent_tag, grandparent_tag, just_pages, ex
                 m_h.save()
 
 
-                print "\timported image %s on page %s" % (filename.encode('utf-8'), element.attrib.get('attached_to_pagename').encode('utf-8'))
+                return (True, "imported image %s on page %s" % (filename.encode('utf-8'), element.attrib.get('attached_to_pagename').encode('utf-8')))
+
         # Old version of a file for a page.
         elif (element.tag == 'file' and
             element.attrib.get('deleted', 'False') == 'True'):
             if not element.text:
-                return
+                return (None, "blank text element")
             filename = element.attrib.get('name')
             file_content = ContentFile(b64decode(element.text))
             slug = slugify(normalize_pagename(element.attrib.get('attached_to_pagename')))
@@ -1520,10 +1517,34 @@ def process_element(element, parent, parent_tag, grandparent_tag, just_pages, ex
             pfile_h.history_type = 1
             pfile_h.save()
 
-            print "\timported historical file %s on page %s" % (filename.encode('utf-8'), normalize_pagename(element.attrib.get('attached_to_pagename')).encode('utf-8'))
+            return (True, "imported historical file %s on page %s" % (filename.encode('utf-8'), normalize_pagename(element.attrib.get('attached_to_pagename')).encode('utf-8')))
 
+    return (None, "fell out the bottom")
 
-def import_process(items, just_pages, exclude_pages, just_maps, redirect_queue=None):
+def import_process(items, just_pages, exclude_pages, just_maps, redirect_queue=None, output_queue=None):
+    """Subprocess to handle importing of content.
+
+    This can either run 'in situ' (helpful for BIG things, like files), or
+    as one of a fleet of subprocesses.
+
+    items: a multiprocessing.Queue containing tuples of:
+        element_str: an XML representation of an element
+        parent_str: an XML representation of the element's parent
+        parent_tag: the tag of the parent
+        grandparent_tag: the tag of the parent's parent
+
+    just_pages, exclude_pages, just_maps: booleans indicating which phase
+        of importing we're in
+
+    redirect_queue: a multiprocessing.Queue that we put stuff on for later
+        use by process_redirects
+
+    output_queue: a multiprocessing.Queue that we put status responses
+        onto, for output by the caller
+    """
+
+    # Break old database connections, because we're probably not running
+    # in the same process any more.
     from django.db import close_connection, connection
     close_connection()
     connection.connection = None
@@ -1531,24 +1552,32 @@ def import_process(items, just_pages, exclude_pages, just_maps, redirect_queue=N
     running = True
     while running:
         try:
+            # Pull an item from the queue if there's one available.
             item = items.get(timeout=10)
             element_str, parent_str, parent_tag, grandparent_tag = item
+
+            # Parse the XML so we have something to work with
+            element = etree.XML(element_str)
             if parent_str is not None:
                 parent = etree.XML(parent_str)
             else:
                 parent = None
-            element = etree.XML(element_str)
+
+            # Handle the element, ensuring that we commit ASAP
             with transaction.commit_on_success():
-                process_element(element, parent, parent_tag, grandparent_tag, just_pages, exclude_pages, just_maps, redirect_queue)
+                result, message = process_element(element, parent, parent_tag, grandparent_tag, just_pages, exclude_pages, just_maps, redirect_queue)
+                if output_queue is not None:
+                    output_queue.put((result, message))
             items.task_done()
         except Empty:
-            print "subprocess got empty"
+            # We're done, time to go home
             running = False
 
 def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False, redirect_queue=None):
     jobs = []
     to_start = []
     items = JoinableQueue()
+    output_queue = JoinableQueue()
     n = 0
     parsing = True
 
@@ -1610,7 +1639,8 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
         gc.collect()
 
         if len(jobs) < max_jobs and items.qsize() > len(jobs):
-            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps, redirect_queue,))
+            # If we have work to do, start up a subprocess
+            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps, redirect_queue, output_queue,))
             p.daemon = True
             p.start()
             jobs.append(p)
