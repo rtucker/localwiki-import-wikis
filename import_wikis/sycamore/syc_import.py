@@ -1803,9 +1803,15 @@ def process_redirects(redirect_queue):
         if slugify(from_pagename) == to_page.slug:
             continue
         if not Redirect.objects.filter(source=slugify(from_pagename)).exists():
-            r = Redirect(source=slugify(from_pagename), destination=to_page)
-            r.save(user=u, comment="Automated edit. Creating redirect.",
-                   date=to_page.versions.latest('history_date'))
+            try:
+                r = Redirect(source=slugify(from_pagename), destination=to_page)
+                redir_date = to_page.versions.latest('history_date').history_date
+                r.save(user=u, comment="Automated edit. Creating redirect.",
+                       date=redir_date)
+            except:
+                r = Redirect(source=slugify(from_pagename), destination=to_page)
+                r.save(user=u, comment="Automated edit. Creating redirect.")
+            print "\tRedirected: %s --> %s" % (from_pagename, to_pagename)
         redirect_queue.task_done()
 
 
