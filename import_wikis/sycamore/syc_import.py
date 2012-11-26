@@ -558,6 +558,7 @@ class Formatter(sycamore_HTMLFormatter):
         try:
             from Sycamore.macro.flickr import getArguments, licenses_getInfo
             from Sycamore.support import flickr
+            from django.core.cache import cache
         except ImportError:
             return ''
 
@@ -566,7 +567,12 @@ class Formatter(sycamore_HTMLFormatter):
 
         url_image_name = urllib.quote(image_name.encode('utf-8'))
         photohandle = flickr.Photo(image_name)
-        licensename = licenses_getInfo(photohandle.license)
+
+        # We gotta do some caching here, due to the Flickr API limits.
+        licensename = cache.get('flickr-license-%s' % photohandle.license)
+        if not licensename:
+            licensename = licenses_getInfo(photohandle.license)
+            cache.set('flickr-license-%s' % photohandle.license, licensename)
         oklicenses = ['1','2','3','4','5','6','7','8']
 
         if (photohandle.license not in oklicenses) or (not photohandle.ispublic):
@@ -578,9 +584,18 @@ class Formatter(sycamore_HTMLFormatter):
                     "        Alignment %s\n"
                     "        Has_Border %s -->\n") % getArguments(args)
 
-        ownername = photohandle.owner.username
-        imageurl = photohandle.getURL(urlType='source', size=size)
-        linkurl = photohandle.getURL(urlType='url', size=size)
+        ownername = cache.get('flickr-%s-owner' % url_image_name)
+        if not ownername:
+            ownername = photohandle.owner.username
+            cache.set('flickr-%s-owner' % url_image_name, ownername)
+        imageurl = cache.get('flickr-%s-imageurl' % url_image_name)
+        if not imageurl:
+            imageurl = photohandle.getURL(urlType='source', size=size)
+            cache.set('flickr-%s-imageurl' % url_image_name, imageurl)
+        linkurl = cache.get('flickr-%s-linkurl' % url_image_name)
+        if not linkurl:
+            linkurl = photohandle.getURL(urlType='url', size=size)
+            cache.set('flickr-%s-linkurl' % url_image_name, linkurl)
 
         if caption:
             caption += ' (by Flickr user %s: [%s license info], [%s link to original])' % (
@@ -601,7 +616,10 @@ class Formatter(sycamore_HTMLFormatter):
         width, height = None, None
         total_style_value, img_style_value = '', ''
 
-        sizedata = photohandle.getSizes()
+        sizedata = cache.get('flickr-%s-sizedata' % url_image_name)
+        if not sizedata:
+            sizedata = photohandle.getSizes()
+            cache.set('flickr-%s-sizedata' % url_image_name, sizedata)
         for i in sizedata:
             if i['label'].lower() == size.lower():
                 width, height = i['width'], i['height']
