@@ -67,6 +67,7 @@ from django.contrib.gis.geos import Point, MultiPoint
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.utils.encoding import smart_str
+from django.conf import settings
 
 #################################
 # CHANGE THIS
@@ -1705,6 +1706,7 @@ def clear_out_everything():
     from django.db import connection
     from django.contrib.auth.models import User
     from users.models import UserProfile
+    from pages.models import PageFile
 
     cursor = connection.cursor()
     print 'Bulk clearing out all map data'
@@ -1724,6 +1726,15 @@ def clear_out_everything():
     cursor.execute('DELETE from tags_pagetagset_hist_tags')
     cursor.execute('DELETE from tags_tag_hist')
     print 'All tag history deleted'
+
+    print 'Bulk deleting underlying pagefiles'
+    for pf in PageFile.objects.filter(file__isnull=False):
+        target = os.path.join(settings.MEDIA_ROOT, str(pf.file))
+        try:
+            os.unlink(target)
+        except Exception, e:
+            print "\tos.unlink %s: %s" % (target, e)
+    print 'All underlying pagefiles deleted'
 
     print 'Bulk clearing out all file data'
     cursor.execute('DELETE from pages_pagefile')
@@ -1766,6 +1777,8 @@ def process_redirects(redirect_queue):
     # versions will note that the page used to be a redirect in the page
     # history.
     from django.contrib.auth.models import User
+
+    #Redirect.objects.all().delete()
 
     try:
         u = User.objects.get(username="LocalWikiRobot")
