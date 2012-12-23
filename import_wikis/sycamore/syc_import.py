@@ -1796,8 +1796,8 @@ def process_redirects(redirect_queue):
         try:
             to_page = Page.objects.get(name=to_pagename)
         except Page.DoesNotExist:
-            print "Error creating redirect: %s --> %s" % (from_pagename, to_pagename)
-            print "  (page %s does not exist)" % to_pagename
+            print "Error creating redirect: %s --> %s" % (smart_str(from_pagename), smart_str(to_pagename))
+            print "  (page %s does not exist)" % smart_str(to_pagename)
             continue
 
         if slugify(from_pagename) == to_page.slug:
@@ -1811,7 +1811,7 @@ def process_redirects(redirect_queue):
             except:
                 r = Redirect(source=slugify(from_pagename), destination=to_page)
                 r.save(user=u, comment="Automated edit. Creating redirect.")
-            print "\tRedirected: %s --> %s" % (from_pagename, to_pagename)
+            print "\tRedirected: %s --> %s" % (smart_str(from_pagename), smart_str(to_pagename))
         redirect_queue.task_done()
 
 
