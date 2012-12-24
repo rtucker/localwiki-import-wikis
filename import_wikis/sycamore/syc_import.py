@@ -1469,65 +1469,55 @@ def process_point_element(element):
     from maps.models import MapData
     logger = logging.getLogger(__name__ + '.process_point_element')
 
-    parent_tag = element.getparent().tag
-    if parent_tag == 'current':
-        try:
-            p = Page.objects.get(slug=slugify(normalize_pagename(element.attrib['pagename'])))
-        except Page.DoesNotExist:
-            logger.info("map point attached to nonexistent page %s", smart_str(element.attrib['pagename']))
-            return
-        else:
-            mapdata = MapData.objects.filter(page=p)
-            x = float(element.attrib['x'])
-            y = float(element.attrib['y'])
-            point = Point(y, x)
-            if mapdata:
-                m = mapdata[0]
-                points = m.points
-                points.append(point)
-                m.points = points
-            else:
-                points = MultiPoint(point)
-                m = MapData(page=p, points=points)
-
-            m.save()
-
-            # Save historical version - with editor info, etc
-            m_h = m.versions.most_recent()
-
-            try:
-                edit_time_epoch = float(element.attrib['created_time'])
-            except ValueError:
-                edit_time_epoch = -1
-            username_edited = element.attrib['created_by']
-            history_user_ip = element.attrib['created_by_ip']
-            if not history_user_ip.strip():
-                history_user_ip = None
-
-            user = User.objects.filter(username=username_edited)
-            if user:
-                user = user[0]
-                history_user_id = user.id
-            else:
-                history_user_id = None
-            
-            history_type = 0
-            history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
-            m_h.history_date = history_date
-            m_h.history_type = history_type
-            m_h.history_user_id = history_user_id
-            m_h.history_user_ip = history_user_ip
-            m_h.save()
-
-            logger.debug("Map point %g %g created on %s", x, y, smart_str(element.attrib['pagename']))
-
-    elif parent_tag == 'old':
-        # Skip import of historical map point data - not really
-        # interesting and it'd be weird because the points are
-        # kept separately in the XML dump.  People weren't
-        # thinking about map data being independently versioned
-        # at the time.
+    try:
+        p = Page.objects.get(slug=slugify(normalize_pagename(element.attrib['pagename'])))
+    except Page.DoesNotExist:
+        logger.info("map point attached to nonexistent page %s", smart_str(element.attrib['pagename']))
         return
+    else:
+        mapdata = MapData.objects.filter(page=p)
+        x = float(element.attrib['x'])
+        y = float(element.attrib['y'])
+        point = Point(y, x)
+        if mapdata:
+            m = mapdata[0]
+            points = m.points
+            points.append(point)
+            m.points = points
+        else:
+            points = MultiPoint(point)
+            m = MapData(page=p, points=points)
+
+        m.save()
+
+        # Save historical version - with editor info, etc
+        m_h = m.versions.most_recent()
+
+        try:
+            edit_time_epoch = float(element.attrib['created_time'])
+        except ValueError:
+            edit_time_epoch = -1
+        username_edited = element.attrib['created_by']
+        history_user_ip = element.attrib['created_by_ip']
+        if not history_user_ip.strip():
+            history_user_ip = None
+
+        user = User.objects.filter(username=username_edited)
+        if user:
+            user = user[0]
+            history_user_id = user.id
+        else:
+            history_user_id = None
+
+        history_type = 0
+        history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
+        m_h.history_date = history_date
+        m_h.history_type = history_type
+        m_h.history_user_id = history_user_id
+        m_h.history_user_ip = history_user_ip
+        m_h.save()
+
+        logger.debug("Map point %g %g created on %s", x, y, smart_str(element.attrib['pagename']))
 
 def import_process(items_queue, redirect_queue=None):
     """Subprocess to handle importing of content."""
@@ -1657,7 +1647,15 @@ def import_from_export_file(import_queue, file_items, page_items, version_items,
 
         elif element.tag == 'point':
             # A point on a map.  Simple.
-            map_items.put(etree.tostring(element))
+            # Skip import of historical map point data - not really
+            # interesting and it'd be weird because the points are
+            # kept separately in the XML dump.  People weren't
+            # thinking about map data being independently versioned
+            # at the time.
+
+            parent_group = element.getparent()
+            if parent_group is not None and parent_group.tag == 'current':
+                map_items.put(etree.tostring(element))
 
         elif element.tag == 'file':
             # A file.
