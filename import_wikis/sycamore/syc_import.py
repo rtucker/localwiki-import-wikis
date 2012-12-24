@@ -51,6 +51,7 @@ import sys
 import site
 import gc
 import time
+import logging
 
 import re
 import datetime
@@ -58,6 +59,7 @@ import urllib
 import copy
 from lxml import etree
 from base64 import b64decode
+from collections import defaultdict
 
 from pages.models import Page, slugify, PageFile, clean_name
 from maps.models import MapData
@@ -81,6 +83,11 @@ from Sycamore.formatter.base import FormatterBase
 from Sycamore import wikiutil
 from Sycamore.parser.wiki_simple import Parser as sycamore_SimpleParser
 from Sycamore.parser.wiki import Parser as sycamore_Parser
+
+logger = logging.getLogger(__name__)
+
+DEATH_SEMAPHORE = 0xDEAD
+
 
 def replace_baseline_table_color(hex):
     if hex.lower() == '#e0e0ff':
@@ -722,6 +729,7 @@ class Formatter(sycamore_HTMLFormatter):
         return "<sup>%s</sup>" % idx
 
     def macro(self, macro_obj, name, args):
+        logger = logging.getLogger(__name__ + '.macro')
         macro_processors = {
             'image': self.process_image_macro,
             'file': self.process_file_macro,
@@ -737,7 +745,7 @@ class Formatter(sycamore_HTMLFormatter):
             try:
                 return macro_processors[name.lower()](macro_obj, name, args)
             except Exception, e:
-                print "\t ERROR failed macro processing on", smart_str(name), args
+                logger.error("failed macro processing on %s: %s", smart_str(name), args)
         return ''
 
     def pagelink(self, pagename, text=None, **kw):
@@ -1161,7 +1169,7 @@ def render_wikitext(text, strong=True, page_slug=None):
     from Sycamore.Page import Page
     from Sycamore.user import User
     from Sycamore import user
-
+    logger = logging.getLogger(__name__ + '.render_wikitext')
     if not text:
         return ''
 
@@ -1178,7 +1186,7 @@ def render_wikitext(text, strong=True, page_slug=None):
       wiki_html = sycamore_wikifyString(text, request, page,
           formatter=formatter, strong=strong, doCache=False)
     except Exception, e:
-      print "\tERROR render_wikitext (page %s): %s" % (page_slug, e)
+      logger.error("ERROR render_wikitext (page %s): %s", page_slug, e)
       return ''
 
     if strong and hasattr(formatter, '_footnotes'):
@@ -1189,7 +1197,7 @@ def render_wikitext(text, strong=True, page_slug=None):
     return wiki_html
 
 
-def create_page(page_elem, text_elem, redirect_queue=None):
+def process_page_element(page_elem, redirect_queue=None):
     # We import a page in a few different phases.
     # We first pull in the raw wiki text, then we render it using the
     # Sycamore parser and a modified Sycamore formatter (which does the HTML
@@ -1197,16 +1205,19 @@ def create_page(page_elem, text_elem, redirect_queue=None):
     # HTML is generated (like fixing empty paragraphs), while other
     # fixes are easier to do by modifying our custom Formatter.  So we
     # mix and match to get the best result.
+    logger = logging.getLogger(__name__ + '.process_page_element')
     name = normalize_pagename(page_elem.attrib['propercased_name'])
     if Page.objects.filter(slug=slugify(name)).exists():
-        return (None, "page already exists")
-    wikitext = text_elem.text
+        logger.debug("page already exists: %s", name)
+        return
     try:
+        wikitext = page_elem.find('text').text
         wikitext = reformat_wikitext(wikitext)
+        html = render_wikitext(wikitext, page_slug=slugify(name))
     except Exception, e:
         # render error
-        return (False, "ERROR rendering wikitext for %s (%s)" % (smart_str(name), e))
-    html = render_wikitext(wikitext, page_slug=slugify(name))
+        logger.exception("ERROR rendering wikitext for %s", name)
+        return
     if wikitext and wikitext.strip().lower().startswith('#redirect'):
         # Page is a redirect
         line = wikitext.split('\n')[0].strip()
@@ -1215,18 +1226,21 @@ def create_page(page_elem, text_elem, redirect_queue=None):
         if redirect_queue is not None:
             redirect_queue.put((from_page, to_page))
             # skip page creation
-            return (True, "Queued page redirect %s -> %s" % (smart_str(from_page), smart_str(to_page)))
-        return (False, "no redirect queue available")
+            logger.debug("Queued page redirect %s -> %s", smart_str(from_page), smart_str(to_page))
+            return
+        raise RuntimeError("no redirect queue available")
     if not html or not html.strip():
-        return (False, "ERROR empty page (probably deleted): %s" % smart_str(name))
+        logger.debug("empty page (probably deleted): %s", smart_str(name))
+        return
     p = Page(name=name, content=html)
     try:
         p.clean_fields()
     except Exception, e:
-        return (False, "ERROR importing HTML for %s (%s)" % (smart_str(name), e))
+        logger.exception("ERROR importing HTML for %s", name)
+        return
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
-    return (True, "Imported page %s" % smart_str(name))
+    logger.debug("Imported page %s", smart_str(name))
 
 
 def convert_edit_type(s):
@@ -1245,8 +1259,9 @@ def convert_edit_type(s):
     return d[s]
 
 
-def create_page_version(version_elem, text_elem):
+def process_version_element(version_elem):
     from django.contrib.auth.models import User
+    logger = logging.getLogger(__name__ + '.process_version_element')
 
     name = normalize_pagename(version_elem.attrib['propercased_name'])
     edit_time_epoch = float(version_elem.attrib['edit_time'])
@@ -1263,39 +1278,43 @@ def create_page_version(version_elem, text_elem):
         history_user_id = user.id
     else:
         history_user_id = None
-    
+
     history_type = convert_edit_type(edit_type)
     history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
 
     # If we already have a version exactly like this, skip
     if Page.versions.filter(name=name, history_comment=history_comment, history_date=history_date).exists():
-        return (None, "version already exists")
+        logger.info("version already exists: %s / %s / %s", name, history_comment, history_date)
+        return
 
     # Set id to 0 because we create historical versions in
     # parallel.  We fix this in fix_historical_ids().
     id = 0
 
-    wikitext = text_elem.text
-    wikitext = reformat_wikitext(wikitext)
+    wikitext = version_elem.find('text').text
     try:
+        wikitext = reformat_wikitext(wikitext)
         html = render_wikitext(wikitext, page_slug=slugify(name))
     except Exception, e:
         # render error
-        return (False, "ERROR rendering wikitext for %s (%s)" % (smart_str(name), e))
+        logger.exception("ERROR rendering wikitext for %s", smart_str(name))
+        return
+
     if wikitext and wikitext.strip().startswith('#redirect'):
         # Page is a redirect
         line = wikitext.strip()
     	to_page = line[line.find('#redirect')+10:]
         html = '<p>This version of the page was a redirect.  See <a href="%s">%s</a>.</p>' % (to_page, to_page)
     if not html or not html.strip():
-        return (False, "ERROR empty page version: %s (%s)" % (smart_str(name), history_date))
+        logger.info("empty page version: %s (%s)", smart_str(name), history_date)
 
     # Create a dummy Page object to get the correct cleaning behavior
     p = Page(name=name, content=html)
     try:
         p.clean_fields()
     except Exception, e:
-        return (False, "ERROR importing HTML for %s (%s)" % (smart_str(name), e))
+        logger.exception("ERROR importing HTML for %s", smart_str(name))
+        return
     html = tidy_html(p.content)
 
     p_h = Page.versions.model(
@@ -1310,7 +1329,7 @@ def create_page_version(version_elem, text_elem):
         history_user_ip=history_user_ip
     )
     p_h.save()
-    return (True, "Imported historical page %s at %s" % (smart_str(name), history_date))
+    logger.debug("Imported historical page %s at %s", smart_str(name), history_date)
 
 
 def is_image(filename):
@@ -1324,6 +1343,7 @@ def is_image(filename):
 
 def process_user_element(element):
     from django.contrib.auth.models import User
+    logger = logging.getLogger(__name__ + '.process_user_element')
 
     parent = element.getparent()
     if parent is None:
@@ -1336,7 +1356,7 @@ def process_user_element(element):
         join_date = element.attrib.get('join_date')
         if disabled == '1':
             return
-        if join_date is '':
+        if join_date == '':
             join_dttm = datetime.datetime.now()
         else:
             join_dttm = datetime.datetime.fromtimestamp(float(join_date))
@@ -1345,142 +1365,142 @@ def process_user_element(element):
             return
         u = User.objects.create_user(username, email)
         u.date_joined = join_dttm
-        if enc_password is not '':
+        if enc_password != '':
             u.password = enc_password
         u.save()
-        print 'created user: %s %s' % (smart_str(username), smart_str(email))
+        logger.debug("Created user: %s <%s>", smart_str(username), smart_str(email))
 
-def process_element(element, parent, parent_tag, grandparent_tag, just_pages, exclude_pages, just_maps, redirect_queue):
+
+def process_file_element(element):
     from django.contrib.auth.models import User
-    if parent_tag is None:
-        return (None, 'parent_tag blank')
+    from pages.models import slugify, PageFile
+    logger = logging.getLogger(__name__ + '.process_file_element')
 
-    if not just_maps and not exclude_pages:
-        if parent_tag == 'page':
-            if element.tag == 'text':
-                return create_page(parent, element, redirect_queue)
-        elif parent_tag == 'version' and element.tag == 'text' and grandparent_tag == 'page':
-            return create_page_version(parent, element)
-    if just_pages:
-        return (None, 'not a page')
-    if parent_tag == 'current' or parent_tag == 'old':
-        if element.tag == 'point':
-            if parent_tag == 'current':
-                try:
-                    p = Page.objects.get(slug=slugify(normalize_pagename(element.attrib['pagename'])))
-                except Page.DoesNotExist:
-                    return (False, "map point attached to nonexistent page %s" % smart_str(element.attrib['pagename']))
-                else:
-                    mapdata = MapData.objects.filter(page=p)
-                    x = float(element.attrib['x'])
-                    y = float(element.attrib['y'])
-                    point = Point(y, x)
-                    if mapdata:
-                        m = mapdata[0]
-                        points = m.points
-                        points.append(point)
-                        m.points = points
-                    else:
-                        points = MultiPoint(point)
-                        m = MapData(page=p, points=points)
+    if element.tag != 'file':
+        raise RuntimeError("element is not a file")
 
-                    m.save()
+    filename = element.attrib.get('name')
+    slug = slugify(normalize_pagename(element.attrib.get('attached_to_pagename')))
 
-                    # Save historical version - with editor info, etc
-                    m_h = m.versions.most_recent()
+    if not element.text:
+        logger.warning("slug '%s' filename '%s': element.text is blank",
+                       slug, filename)
+        return
 
-                    try:
-                        edit_time_epoch = float(element.attrib['created_time'])
-                    except ValueError:
-                        edit_time_epoch = -1
-                    username_edited = element.attrib['created_by']
-                    history_user_ip = element.attrib['created_by_ip']
-                    if not history_user_ip.strip():
-                        history_user_ip = None
+    file_content = ContentFile(b64decode(element.text))
 
-                    user = User.objects.filter(username=username_edited)
-                    if user:
-                        user = user[0]
-                        history_user_id = user.id
-                    else:
-                        history_user_id = None
-                    
-                    history_type = 0
-                    history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
-                    m_h.history_date = history_date
-                    m_h.history_type = history_type
-                    m_h.history_user_id = history_user_id
-                    m_h.history_user_ip = history_user_ip
-                    m_h.save()
+    edit_time_epoch = float(element.attrib['uploaded_time'])
+    username_edited = element.attrib['uploaded_by']
+    history_user_ip = element.attrib['uploaded_by_ip']
+    if not history_user_ip.strip():
+        history_user_ip = None
 
-                    return (True, "Map point %g %g created on %s" % (x, y, smart_str(element.attrib['pagename'])))
+    user = User.objects.filter(username=username_edited)
+    if user:
+        user = user[0]
+        history_user_id = user.id
+    else:
+        history_user_id = None
 
-            elif parent_tag == 'old':
-                # Skip import of historical map point data - not really
-                # interesting and it'd be weird because the points are
-                # kept separately in the XML dump.  People weren't
-                # thinking about map data being independently versioned
-                # at the time.
-                return (None, "old map point data ignored")
+    if element.attrib.get('deleted', 'False') != 'True':
+        # XXX TODO generic files
+        if PageFile.objects.filter(name=filename, slug=slug).exists():
+            logger.warning("slug '%s' filename '%s': already exists",
+                           slug, filename)
+            return
 
-    if just_maps:
-        return (None, 'not a map point')
-    if parent_tag == 'files':
-        # Current version of a file for a page.
-        if (element.tag == 'file' and
-            element.attrib.get('deleted', 'False') != 'True'):
-            if not element.text:
-                return (None, "blank text element")
-            filename = element.attrib.get('name')
-            file_content = ContentFile(b64decode(element.text))
-            slug = slugify(normalize_pagename(element.attrib.get('attached_to_pagename')))
-            # XXX TODO generic files
-            if is_image(filename):
-                if PageFile.objects.filter(name=filename, slug=slug).exists():
-                    return (None, "file already exists")
-                pfile = PageFile(name=filename, slug=slug)
+        pfile = PageFile(name=filename, slug=slug)
+        pfile.file.save(filename, file_content, save=False)
+        pfile.save()
 
-                pfile.file.save(filename, file_content, save=False)
-                pfile.save()
-
-                # Save historical version - with editor info, etc
-                m_h = pfile.versions.most_recent()
-
-                edit_time_epoch = float(element.attrib['uploaded_time'])
-                username_edited = element.attrib['uploaded_by']
-                history_user_ip = element.attrib['uploaded_by_ip']
-                if not history_user_ip.strip():
-                    history_user_ip = None
-
-                user = User.objects.filter(username=username_edited)
-                if user:
-                    user = user[0]
-                    history_user_id = user.id
-                else:
-                    history_user_id = None
-                
-                history_type = 0 # Will fix in historical version if needed
-                history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
-                m_h.history_date = history_date
-                m_h.history_type = history_type
-                m_h.history_user_id = history_user_id
-                m_h.history_user_ip = history_user_ip
-                m_h.save()
+        # Save historical version - with editor info, etc
+        m_h = pfile.versions.most_recent()
 
 
-                return (True, "imported image %s on page %s" % (filename.encode('utf-8'), element.attrib.get('attached_to_pagename').encode('utf-8')))
+        history_type = 0 # Will fix in historical version if needed
+        history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
+        m_h.history_date = history_date
+        m_h.history_type = history_type
+        m_h.history_user_id = history_user_id
+        m_h.history_user_ip = history_user_ip
+        m_h.save()
 
+        logger.debug("slug '%s' filename '%s': file imported",
+                     slug, filename)
+
+
+    else:
         # Old version of a file for a page.
-        elif (element.tag == 'file' and
-            element.attrib.get('deleted', 'False') == 'True'):
-            if not element.text:
-                return (None, "blank text element")
-            filename = element.attrib.get('name')
-            file_content = ContentFile(b64decode(element.text))
-            slug = slugify(normalize_pagename(element.attrib.get('attached_to_pagename')))
-            edit_time_epoch = float(element.attrib['uploaded_time'])
-            username_edited = element.attrib['uploaded_by']
-            history_user_ip = element.attrib['uploaded_by_ip']
+        if PageFile.versions.filter(name=filename, slug=slug):
+            history_type = 1
+        else:
+            history_type = 0
+        history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
+
+        # Set id to 0 because we create historical versions in
+        # parallel.  We fix this in fix_historical_ids().
+        id = 0
+
+        pfile_h = PageFile.versions.model(
+            id=id,
+            name=filename,
+            slug=slug,
+            history_date=history_date,
+            history_type=history_type,
+            history_user_id=history_user_id,
+            history_user_ip=history_user_ip
+        )
+        pfile_h.file.save(filename, file_content, save=False)
+        pfile_h.save()
+
+        # Change most recent historical version to be 'saved'
+        # rather than 'added'.
+        pfile_h = pfile_h.version_info._object.versions.most_recent()
+        pfile_h.history_type = 1
+        pfile_h.save()
+        logger.debug("slug '%s' filename '%s': historic file imported",
+                     slug, filename)
+
+
+def process_point_element(element):
+    from django.contrib.auth.models import User
+    from django.contrib.gis.geos import Point, MultiPoint
+    from pages.models import Page
+    from maps.models import MapData
+    logger = logging.getLogger(__name__ + '.process_point_element')
+
+    parent_tag = element.getparent().tag
+    if parent_tag == 'current':
+        try:
+            p = Page.objects.get(slug=slugify(normalize_pagename(element.attrib['pagename'])))
+        except Page.DoesNotExist:
+            logger.info("map point attached to nonexistent page %s", smart_str(element.attrib['pagename']))
+            return
+        else:
+            mapdata = MapData.objects.filter(page=p)
+            x = float(element.attrib['x'])
+            y = float(element.attrib['y'])
+            point = Point(y, x)
+            if mapdata:
+                m = mapdata[0]
+                points = m.points
+                points.append(point)
+                m.points = points
+            else:
+                points = MultiPoint(point)
+                m = MapData(page=p, points=points)
+
+            m.save()
+
+            # Save historical version - with editor info, etc
+            m_h = m.versions.most_recent()
+
+            try:
+                edit_time_epoch = float(element.attrib['created_time'])
+            except ValueError:
+                edit_time_epoch = -1
+            username_edited = element.attrib['created_by']
+            history_user_ip = element.attrib['created_by_ip']
             if not history_user_ip.strip():
                 history_user_ip = None
 
@@ -1491,100 +1511,92 @@ def process_element(element, parent, parent_tag, grandparent_tag, just_pages, ex
             else:
                 history_user_id = None
             
-            if PageFile.versions.filter(name=filename, slug=slug):
-                history_type = 1
-            else:
-                history_type = 0
+            history_type = 0
             history_date = datetime.datetime.fromtimestamp(edit_time_epoch)
-            
-            # Set id to 0 because we create historical versions in
-            # parallel.  We fix this in fix_historical_ids().
-            id = 0
+            m_h.history_date = history_date
+            m_h.history_type = history_type
+            m_h.history_user_id = history_user_id
+            m_h.history_user_ip = history_user_ip
+            m_h.save()
 
-            pfile_h = PageFile.versions.model(
-                id=id,
-                name=filename,
-                slug=slug,
-                history_date=history_date,
-                history_type=history_type,
-                history_user_id=history_user_id,
-                history_user_ip=history_user_ip
-            )
-            pfile_h.file.save(filename, file_content, save=False)
-            pfile_h.save()
+            logger.debug("Map point %g %g created on %s", x, y, smart_str(element.attrib['pagename']))
 
-            # Change most recent historical version to be 'saved'
-            # rather than 'added'.
-            pfile_h = pfile_h.version_info._object.versions.most_recent()
-            pfile_h.history_type = 1
-            pfile_h.save()
+    elif parent_tag == 'old':
+        # Skip import of historical map point data - not really
+        # interesting and it'd be weird because the points are
+        # kept separately in the XML dump.  People weren't
+        # thinking about map data being independently versioned
+        # at the time.
+        return
 
-            return (True, "imported historical file %s on page %s" % (filename.encode('utf-8'), normalize_pagename(element.attrib.get('attached_to_pagename')).encode('utf-8')))
-
-    return (None, "fell out the bottom")
-
-def import_process(items, just_pages, exclude_pages, just_maps, redirect_queue=None, output_queue=None):
-    """Subprocess to handle importing of content.
-
-    This can either run 'in situ' (helpful for BIG things, like files), or
-    as one of a fleet of subprocesses.
-
-    items: a multiprocessing.Queue containing tuples of:
-        element_str: an XML representation of an element
-        parent_str: an XML representation of the element's parent
-        parent_tag: the tag of the parent
-        grandparent_tag: the tag of the parent's parent
-
-    just_pages, exclude_pages, just_maps: booleans indicating which phase
-        of importing we're in
-
-    redirect_queue: a multiprocessing.Queue that we put stuff on for later
-        use by process_redirects
-
-    output_queue: a multiprocessing.Queue that we put status responses
-        onto, for output by the caller
-    """
-
+def import_process(items_queue, redirect_queue=None):
+    """Subprocess to handle importing of content."""
     # Break old database connections, because we're probably not running
     # in the same process any more.
     from django.db import close_connection, connection
     close_connection()
     connection.connection = None
 
-    running = True
-    while running:
+    life = 1000
+    while life > 0:
         try:
             # Pull an item from the queue if there's one available.
-            item = items.get(timeout=10)
-            element_str, parent_str, parent_tag, grandparent_tag = item
+            item = items_queue.get(timeout=10)
+
+            if item == DEATH_SEMAPHORE:
+                # oh no!
+                logger.info("Death semaphore received, dying.")
+                items_queue.task_done()
+                return
 
             # Parse the XML so we have something to work with
-            element = etree.XML(element_str)
-            if parent_str is not None:
-                parent = etree.XML(parent_str)
-            else:
-                parent = None
+            element = etree.XML(item)
 
             # Handle the element, ensuring that we commit ASAP
             with transaction.commit_on_success():
-                result, message = process_element(element, parent, parent_tag, grandparent_tag, just_pages, exclude_pages, just_maps, redirect_queue)
-                if output_queue is not None:
-                    output_queue.put((result, message))
-            items.task_done()
+                if element.tag == 'page':
+                    process_page_element(element, redirect_queue)
+                elif element.tag == 'version':
+                    process_version_element(element)
+                elif element.tag == 'point':
+                    process_point_element(element)
+                elif element.tag == 'file':
+                    process_file_element(element)
+                else:
+                    logger.error("unknown element tag %s", element.tag)
+            items_queue.task_done()
         except Empty:
             # We're done, time to go home
-            running = False
+            logger.info("my queue got Empty, goodbye")
+            return
+        except:
+            # Utoh
+            logger.exception("Unknown exception, dying")
+            items_queue.task_done()
+            return
+        life -= 1
 
-def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False, redirect_queue=None):
+def import_from_export_file(import_queue, file_items, page_items, version_items, map_items, redirect_queue):
     jobs = []
     to_start = []
-    items = JoinableQueue()
-    output_queue = JoinableQueue()
     n = 0
     parsing = True
 
     max_jobs = 4
 
+    from django.db import close_connection, connection
+    close_connection()
+    connection.connection = None
+
+    try:
+        fn = import_queue.get(timeout=10)
+        f = open(fn, 'r')
+        logger.info("Beginning parsing on file %s (remaining: %d)", fn, import_queue.qsize())
+    except Empty:
+        logger.info("Import file queue is empty.")
+        return
+
+    parsing = True
     parser = etree.iterparse(f, events=("start", "end",), encoding='utf-8', huge_tree=True)
     while parsing:
         try:
@@ -1592,115 +1604,84 @@ def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=
         except StopIteration:
             parsing = False
         except Exception, s:
-            print "\t ERROR import_from_export_file at", n, s
+            logger.exception("Error on parser.next() at %d", n)
 
         if event != 'end':
             continue
 
         if n % 1000 == 0:
-            for job in jobs:
-                if not job.is_alive():
-                    print "Reaping dead process", job
-                    jobs.remove(job)
-            successes = failures = nones = 0
-            while True:
-                try:
-                    result, message = output_queue.get_nowait()
-                    output_queue.task_done()
-                except Empty:
-                    break
-                if result is False:
-                    print "\t" + message
-                    failures += 1
-                elif result is True:
-                    successes += 1
-                elif result is None:
-                    nones += 1
-
-            print datetime.datetime.now(), "element %d (this block: good: %d, bad: %d, no action: %d), task queue %d, redirect queue %d, workers %d" % (n, successes, failures, nones, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
+            logger.info("At element %d: file queue %d, page queue %d, " +
+                        "version queue %d, map queue %d, redirect queue %d",
+                        n, file_items.qsize(), page_items.qsize(),
+                        version_items.qsize(), map_items.qsize(),
+                        redirect_queue.qsize())
 
         n += 1
 
-        if element.tag in ['text']:
-            # The content of a page or a version.
-            parent = element.getparent()
-            parent_tag = parent.tag if (parent is not None) else None
-            parent_parent = parent.getparent() if (parent is not None) else None
-            grandparent_tag = parent_parent.tag if (parent_parent is not None) else None
-            item = (etree.tostring(element), etree.tostring(parent), parent_tag, grandparent_tag)
-            items.put(item)
-        elif element.tag in ['point']:
-            # A point on a map.
-            parent = element.getparent()
-            parent_tag = parent.tag if (parent is not None) else None
-            parent_parent = parent.getparent() if (parent is not None) else None
-            grandparent_tag = parent_parent.tag if (parent_parent is not None) else None
-            item = (etree.tostring(element), None, parent_tag, grandparent_tag)
-            items.put(item)
-        elif element.tag in ['file']:
-            # These suckers are huge.  Like, we're talking Maine Coon size
-            # Don't bother parallelizing 'cuz it's just gonna be all tears
-            from django.db import close_connection, connection
-            close_connection()
-            connection.connection = None
-            parent = element.getparent()
-            parent_tag = parent.tag if (parent is not None) else None
-            process_element(element, parent, parent_tag, None, just_pages, exclude_pages, just_maps, redirect_queue)
+        if element.tag == 'page':
+            # We have found a page.  We want to isolate this to just the
+            # page itself, not the historic versions.  We also want to
+            # immediately import the latest version of this page.
+            while page_items.qsize() > 500:
+                logger.debug("Pausing to let page queue catch up... (count: %d)", page_items.qsize())
+                time.sleep(10)
+            leanpage = copy.copy(element)
+            first_child = None
+            child_count = 0
+            for child in leanpage.iterchildren():
+                if child.tag == 'version':
+                    child_count += 1
+                    if child_count == 1:
+                        first_child = copy.copy(child)
+                    leanpage.remove(child)
+            page_items.put(etree.tostring(leanpage))
+            if first_child is not None:
+                page_items.put(etree.tostring(first_child))
 
-        # Remove all previous siblings to keep the in-memory tree small.
-        element.clear()
-        parent = element.getparent()
-        previous_sibling = element.getprevious()
-        while previous_sibling is not None:
-            parent.remove(previous_sibling)
-            previous_sibling = element.getprevious()
+        elif element.tag == 'version' and element.getparent().tag == 'page':
+            # We have found a version of a page.
+            while version_items.qsize() > 50000:
+                logger.debug("Pausing to let version queue catch up... (count: %d)", version_items.qsize())
+                page_items.put(DEATH_SEMAPHORE)
+                time.sleep(10)
+            parent_page = element.getparent()
+            child_count = 0
+            our_position = 0
+            for child in parent_page.iterchildren():
+                if child.tag == 'version':
+                    child_count += 1
+                if sorted(child.values()) == sorted(element.values()):
+                    our_position = child_count
+            if our_position > 1:
+                version_items.put(etree.tostring(element))
 
-        gc.collect()
+        elif element.tag == 'point':
+            # A point on a map.  Simple.
+            map_items.put(etree.tostring(element))
 
-        if len(jobs) < max_jobs and items.qsize() > len(jobs):
-            # If we have work to do, start up a subprocess
-            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps, redirect_queue, output_queue,))
-            p.daemon = True
-            p.start()
-            jobs.append(p)
-            pass
+        elif element.tag == 'file':
+            # A file.
+            while file_items.qsize() > 100:
+                logger.debug("Pausing to let file queue catch up... (count: %d)", file_items.qsize())
+                time.sleep(10)
+            file_items.put(etree.tostring(element))
 
-    print datetime.datetime.now(), "DONE PARSING at element %d, task queue %d, redirect queue %d, workers %d" % (n, items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
-
-    while True:
-        time.sleep(5)
-        for job in jobs:
-            if not job.is_alive():
-                print "Reaping dead process", job
-                jobs.remove(job)
-
-        if len(jobs) < max_jobs and items.qsize() > len(jobs):
-            # If we have work to do, start up a subprocess
-            p = Process(target=import_process, args=(items, just_pages, exclude_pages, just_maps, redirect_queue, output_queue,))
-            p.daemon = True
-            p.start()
-            jobs.append(p)
-        elif items.qsize() == 0:
-            print "done!"
-            break
-        print datetime.datetime.now(), "STILL PARSING, task queue %d, redirect queue %d, workers %d" % (items.qsize(), redirect_queue.qsize() if redirect_queue is not None else -1, len(jobs))
-
-def users_import_from_export_file(f):
-    print 'importing users'
-    for event, element in etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True):
-        if event == 'start':
-            pass
-        elif event == 'end':
+        elif element.tag == 'user':
+            # It's a user.  Simple.  Do it.
             process_user_element(element)
-            element.clear()
 
+        if element.tag in ['page', 'point', 'file']:
             # Remove all previous siblings to keep the in-memory tree small.
+            element.clear()
             parent = element.getparent()
             previous_sibling = element.getprevious()
             while previous_sibling is not None:
                 parent.remove(previous_sibling)
                 previous_sibling = element.getprevious()
+            gc.collect()
 
+    f.close()
+    import_queue.task_done()
 
 def clear_out_everything():
     from django.db import connection
@@ -1709,67 +1690,37 @@ def clear_out_everything():
     from pages.models import PageFile
 
     cursor = connection.cursor()
-    print 'Bulk clearing out all map data'
-    cursor.execute('DELETE from maps_mapdata')
-    print 'All map data deleted'
-    print 'Bulk clearing out all map history'
-    cursor.execute('DELETE from maps_mapdata_hist')
-    print 'All map history deleted'
 
-    print 'Bulk clearing out all tag data'
-    cursor.execute('DELETE from tags_pagetagset')
-    cursor.execute('DELETE from tags_pagetagset_tags')
-    cursor.execute('DELETE from tags_tag')
-    print 'All tag data deleted'
-    print 'Bulk clearing out all tag history'
-    cursor.execute('DELETE from tags_pagetagset_hist')
-    cursor.execute('DELETE from tags_pagetagset_hist_tags')
-    cursor.execute('DELETE from tags_tag_hist')
-    print 'All tag history deleted'
-
-    print 'Bulk deleting underlying pagefiles'
+    n = 0
     for pf in PageFile.objects.filter(file__isnull=False):
         target = os.path.join(settings.MEDIA_ROOT, str(pf.file))
         try:
             os.unlink(target)
+            n += 1
         except Exception, e:
-            print "\tos.unlink %s: %s" % (target, e)
-    print 'All underlying pagefiles deleted'
+            pass
 
-    print 'Bulk clearing out all file data'
-    cursor.execute('DELETE from pages_pagefile')
-    print 'All file data deleted'
-    print 'Bulk clearing out all file history'
-    cursor.execute('DELETE from pages_pagefile_hist')
-    print 'All file history deleted'
+    logger.info("Deleted %d underlying PageFile objects", n)
 
-    print 'Bulk clearing out all redirect data'
-    cursor.execute('DELETE from redirects_redirect')
-    print 'All redirect data deleted'
-    print 'Bulk clearing out all redirect history'
-    cursor.execute('DELETE from redirects_redirect_hist')
-    print 'All redirect history deleted'
+    for table in ['maps_mapdata', 'maps_mapdata_hist', 'tags_pagetagset',
+                  'tags_pagetagset_tags', 'tags_tag',
+                  'tags_pagetagset_hist', 'tags_pagetagset_hist_tags',
+                  'pages_pagefile', 'pages_pagefile_hist',
+                  'redirects_redirect', 'redirects_redirect_hist',
+                  'pages_page', 'pages_page_hist']:
+        cursor.execute("DELETE FROM %s" % table)
+        logger.info("Deleted all rows from table %s", table)
 
-    print 'Bulk clearing out all page data'
-    cursor.execute('DELETE from pages_page')
-    print 'All page data deleted'
-    print 'Bulk clearing out all page history'
-    cursor.execute('DELETE from pages_page_hist')
-    print 'All page history deleted'
-
-    print 'Committing...'
+    logger.info("Committing...")
     transaction.commit_unless_managed()
 
-    print 'Deleting user profiles...'
+    logger.info("Deleting user profiles and users...")
     UserProfile.objects.filter(user__is_superuser=False).delete()
-
-    print 'Deleting users...'
     User.objects.filter(is_superuser=False).delete()
 
-    print 'Done clearing out'
+    logger.info("Done clearing out old data.")
 
-
-def process_redirects(redirect_queue):
+def process_redirects(redirect_queue, midflight=False):
     # We create the Redirects here.  We don't try and port over the
     # version information for the formerly-page-based redirects, as that
     # is 1) not very important 2) preserved via the page content, in
@@ -1778,7 +1729,12 @@ def process_redirects(redirect_queue):
     # history.
     from django.contrib.auth.models import User
 
-    #Redirect.objects.all().delete()
+    # The database connection from this process may be stale
+    from django.db import close_connection, connection
+    close_connection()
+    connection.connection = None
+
+    logger = logging.getLogger(__name__ + '.process_redirects')
 
     try:
         u = User.objects.get(username="LocalWikiRobot")
@@ -1787,31 +1743,51 @@ def process_redirects(redirect_queue):
                  email='editrobot@localwiki.org')
         u.save()
 
-    while True:
+    remain = redirect_queue.qsize()
+    running = True
+    while running:
+        if midflight and remain < 1:
+            running = False
         try:
             from_pagename, to_pagename = redirect_queue.get(timeout=10)
+            logger.debug("begin processing redirect: %s -> %s", from_pagename, to_pagename)
+            remain -= 1
         except Empty:
             return
 
         try:
             to_page = Page.objects.get(name=to_pagename)
+            redir_date = to_page.versions.latest('history_date').history_date
         except Page.DoesNotExist:
-            print "Error creating redirect: %s --> %s" % (smart_str(from_pagename), smart_str(to_pagename))
-            print "  (page %s does not exist)" % smart_str(to_pagename)
+            if midflight:
+                logger.debug("Recirculating premature redirect: %s -> %s", from_pagename, to_pagename)
+                redirect_queue.put((from_pagename, to_pagename))
+                redirect_queue.task_done()
+                continue
+            else:
+                logger.error("Error creating redirect to nonexistent page: %s -> %s", from_pagename, to_pagename)
+                redirect_queue.task_done()
+                continue
+
+        if redir_date is None and midflight:
+            logger.debug("Recirculating redirect to page without history: %s -> %s", from_pagename, to_pagename)
+            redirect_queue.put((from_pagename, to_pagename))
+            redirect_queue.task_done()
             continue
+        elif redir_date is None:
+            redir_date = datetime.datetime.now()
 
         if slugify(from_pagename) == to_page.slug:
+            logger.error("Redirect of %s -> %s illogical (equal slugs)", from_pagename, to_page)
+            redirect_queue.task_done()
             continue
         if not Redirect.objects.filter(source=slugify(from_pagename)).exists():
-            try:
+            with transaction.commit_on_success():
                 r = Redirect(source=slugify(from_pagename), destination=to_page)
-                redir_date = to_page.versions.latest('history_date').history_date
+                # XXX: Keeps throwing: ValueError: Cannot assign None: "Redirect_hist.destination" does not allow null values.
                 r.save(user=u, comment="Automated edit. Creating redirect.",
                        date=redir_date)
-            except:
-                r = Redirect(source=slugify(from_pagename), destination=to_page)
-                r.save(user=u, comment="Automated edit. Creating redirect.")
-            print "\tRedirected: %s --> %s" % (smart_str(from_pagename), smart_str(to_pagename))
+                logger.debug("Redirected: %s -> %s", from_pagename, to_pagename)
         redirect_queue.task_done()
 
 
@@ -1827,74 +1803,189 @@ def fix_historical_ids():
     close_connection()
     connection.connection = None
 
-    print "Fixing historical ids"
+    fixed = 0
+    logger.info("Fixing historical ids")
     id_map = {}
     for ph in Page.versions.all().defer('content').iterator():
+        if ph.slug not in id_map:
+            ps = Page.objects.filter(slug=ph.slug)
+            if ps:
+                id_map[ph.slug] = ps[0].id
+
         if ph.slug in id_map:
-            ph.id = id_map[ph.slug]
-            ph.save()
-            continue
-        ps = Page.objects.filter(slug=ph.slug)
-        if ps:
-            id_map[ph.slug] = ps[0].id
-            ph.id = ps[0].id
-            ph.save()
+            if ph.id != id_map[ph.slug]:
+                ph.id = id_map[ph.slug]
+                ph.save()
+                fixed += 1
 
     id_map = {}
     for ph in PageFile.versions.all().iterator():
-        if (ph.name, ph.slug) in id_map:
-            ph.id = id_map[(ph.name, ph.slug)]
-            ph.save()
-            continue
-        ps = PageFile.objects.filter(name=ph.name, slug=ph.slug)
-        if ps:
-            id_map[(ph.name, ph.slug)] = ps[0].id
-            ph.id = ps[0].id
-            ph.save()
+        if (ph.name, ph.slug) not in id_map:
+            ps = PageFile.objects.filter(name=ph.name, slug=ph.slug)
+            if ps:
+                id_map[(ph.name, ph.slug)] = ps[0].id
 
+        if (ph.name, ph.slug) in id_map:
+            if ph.id != id_map[(ph.name, ph.slug)]:
+                ph.id = id_map[(ph.name, ph.slug)]
+                ph.save()
+                fixed += 1
+
+    logger.info("Fixed historical IDs on %d versions", fixed)
 
 def turn_off_search():
     haystack_site.unregister(Page)
 
 
+def identify_file(fn):
+    f = open(fn, 'r')
+    parser = etree.iterparse(f, events=("start", "end",), encoding='utf-8', huge_tree=True)
+
+    count = 0
+    for event, element in parser:
+        count += 1
+        if element.tag in ['users', 'pages', 'map', 'files']:
+            return element.tag
+        if count > 20:
+            raise RuntimeError("Can't figure out what this file is: %s" % fn)
+
 def run(*args, **kwargs):
+    IMPORT_ORDER = ['users', 'files', 'pages', 'map']
+    max_jobs = 5
+
     if not args:
-        print "usage: python manage.py runscript syc_import --script-args=<export_file> <user_export_file>"
-        print "or   : python manage.py runscript syc_import --script-args=<page_export_file> <user_export_file> <file_export_file> <map_export_file>"
+        print "usage: localwiki-manage runscript syc_import --script-args=(keep|destroy) exportfiles..."
         return
-    filename = args[0]
-    user_filename = args[1] 
+    disposition = args[0]
 
-    page_filename = filename
-    file_filename = filename
-    map_filename = filename
-    if len(args) == 4:
-        file_filename = args[2]
-        map_filename = args[3]
+    files = args[1:]
 
+    filedict = defaultdict(list)
+    for fn in files:
+        filetype = identify_file(fn)
+        logger.info("Input file of type %s: %s", filetype, fn)
+        filedict[filetype].append(fn)
+
+    import_queue = JoinableQueue()
+    page_items = JoinableQueue()
+    version_items = JoinableQueue()
+    map_items = JoinableQueue()
+    file_items = JoinableQueue()
     redirect_queue = JoinableQueue()
 
-    turn_off_search()
-    clear_out_everything()
+    importers = []
+    jobs = []
+    cleaners = []
+    queues = [('files', file_items,),
+              ('pages', page_items,),
+              ('map', map_items,),
+              ('versions', version_items,),
+             ]
+    jobmap = {}
 
-    f = open(user_filename, 'r')
-    users_import_from_export_file(f)
-    f.close()
-    print 'importing files'
-    f = open(file_filename, 'r')
-    import_from_export_file(f, exclude_pages=True)
+    last_cleaner_fixids = time.time()
+    last_cleaner_redirs = time.time()
+
+    turn_off_search()
+    if disposition.lower() in ['destroy']:
+        clear_out_everything()
+    else:
+        logger.info("Not clearing everything out due to disposition %s", disposition)
+
+    for group in IMPORT_ORDER:
+        for fn in filedict.get(group):
+            import_queue.put(fn)
+
+    # Run a few subprocesses to handle things.
+    running = True
+    while running:
+        # Clean up dead processes
+        for cleaner in cleaners:
+            if not cleaner.is_alive():
+                logger.info("Reaping dead cleaner %s", cleaner)
+                cleaners.remove(cleaner)
+        for importer in importers:
+            if not importer.is_alive():
+                logger.info("Reaping dead importer %s", importer)
+                importers.remove(importer)
+        counts = defaultdict(int)
+        for job in jobs:
+            if not job.is_alive():
+                logger.info("Reaping dead handler %s", job)
+                jobs.remove(job)
+                if job in jobmap:
+                    del jobmap[job]
+            if job in jobmap:
+                counts[jobmap[job]] += 1
+
+        if len(importers) == 0 and not import_queue.empty():
+            # Start an importer
+            p = Process(target=import_from_export_file, args=(import_queue, file_items, page_items, version_items, map_items, redirect_queue))
+            p.daemon = True
+            p.start()
+            importers.append(p)
+            logger.info("Started importer process %s", p)
+
+        # file_items must go before page_items
+        # page_items must go before map_items
+        # version_items shouldn't get too far ahead of page_items
+        for name, queue in queues:
+            if queue.empty():
+                continue
+
+            logger.debug("Considering %s with %d current jobs", name, counts[name])
+            assassination = False
+
+            if counts[name] < 1:
+                for cname, cqueue in queues:
+                    if counts[cname] > 1:
+                        cqueue.put(DEATH_SEMAPHORE)
+                        logger.warning("%s has no handlers, even though there are %d items in queue!  Assassinating %s", name, queue.qsize(), cname)
+                        assassination = True
+                        break
+
+            if (len(jobs) < max_jobs and queue.qsize() > len(jobs)) or assassination:
+                p = Process(target=import_process, args=(queue, redirect_queue,))
+                p.daemon = True
+                p.start()
+                jobs.append(p)
+                jobmap[p] = name
+                logger.info("Starting %s job runner process %s", name, p)
+
+        if len(cleaners) == 0:
+            if (time.time() - last_cleaner_fixids) > 300 and last_cleaner_fixids < last_cleaner_redirs:
+                p = Process(target=fix_historical_ids)
+                p.daemon = True
+                p.start()
+                cleaners.append(p)
+                logger.info("Started fix_historical_ids background process %s", p)
+                last_cleaner_fixids = time.time()
+
+            elif (time.time() - last_cleaner_redirs) > 60:
+                p = Process(target=process_redirects, args=(redirect_queue, True,))
+                p.daemon = True
+                p.start()
+                cleaners.append(p)
+                logger.info("Started process_redirects background process %s", p)
+                last_cleaner_redirs = time.time()
+
+
+        logger.info("Importer processes: %d, Job runners: %d (%s), Cleaners: %d", len(importers), len(jobs), dict(counts), len(cleaners))
+        logger.info("Import queue: %d, File queue: %d, Page queue: %d, Version queue: %d, Map queue: %d, Redirect queue: %d",
+                    import_queue.qsize(), file_items.qsize(), page_items.qsize(), version_items.qsize(), map_items.qsize(), redirect_queue.qsize())
+        logger.info("Last ran fix_historical_ids %d ago, process_redirects %d ago", time.time() - last_cleaner_fixids, time.time() - last_cleaner_redirs)
+
+        # Still running?
+        still_to_do = len(importers) + len(cleaners) + len(jobs)
+        still_to_do += import_queue.qsize()
+        for name, queue in queues:
+            still_to_do += queue.qsize()
+
+        running = still_to_do > 0
+        gc.collect()
+        time.sleep(10)
+
+    logger.info("Final run of fix_historical_ids")
     fix_historical_ids()
-    f.close()
-    print 'importing pages'
-    f = open(page_filename, 'r')
-    import_from_export_file(f, just_pages=True, redirect_queue=redirect_queue)
-    f.close()
-    fix_historical_ids()
-    print 'processing redirects'
+    logger.info("Final run of process_redirects")
     process_redirects(redirect_queue)
-    fix_historical_ids()
-    print 'importing map points'
-    f = open(map_filename, 'r')
-    import_from_export_file(f, just_maps=True)
-    f.close()
-    fix_historical_ids()
