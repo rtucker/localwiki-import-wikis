@@ -745,7 +745,7 @@ class Formatter(sycamore_HTMLFormatter):
             try:
                 return macro_processors[name.lower()](macro_obj, name, args)
             except Exception, e:
-                logger.error("failed macro processing on %s: %s", smart_str(name), args)
+                logger.exception("macro processing failed, macro name: %s, args: %s, exception: %s", name, args, e)
         return ''
 
     def pagelink(self, pagename, text=None, **kw):
@@ -1182,12 +1182,8 @@ def render_wikitext(text, strong=True, page_slug=None):
     formatter = Formatter(request, page_slug=page_slug)
     page = Page("PAGENAME", request)
 
-    try:
-      wiki_html = sycamore_wikifyString(text, request, page,
-          formatter=formatter, strong=strong, doCache=False)
-    except Exception, e:
-      logger.error("ERROR render_wikitext (page %s): %s", page_slug, e)
-      return ''
+    wiki_html = sycamore_wikifyString(text, request, page,
+        formatter=formatter, strong=strong, doCache=False)
 
     if strong and hasattr(formatter, '_footnotes'):
         items = ["%s. %s" % (id, note) for (note, id) in formatter._footnotes]
@@ -1208,7 +1204,7 @@ def process_page_element(page_elem, redirect_queue=None):
     logger = logging.getLogger(__name__ + '.process_page_element')
     name = normalize_pagename(page_elem.attrib['propercased_name'])
     if Page.objects.filter(slug=slugify(name)).exists():
-        logger.debug("page already exists: %s", name)
+        logger.info("Page already exists: %s", name)
         return
     try:
         wikitext = page_elem.find('text').text
@@ -1216,7 +1212,8 @@ def process_page_element(page_elem, redirect_queue=None):
         html = render_wikitext(wikitext, page_slug=slugify(name))
     except Exception, e:
         # render error
-        logger.exception("ERROR rendering wikitext for %s", name)
+        logger.exception("ERROR rendering wikitext to HTML for page %s", name)
+        logger.debug("Element dump for %s: %s", name, etree.tostring(page_elem))
         return
     if wikitext and wikitext.strip().lower().startswith('#redirect'):
         # Page is a redirect
@@ -1230,17 +1227,18 @@ def process_page_element(page_elem, redirect_queue=None):
             return
         raise RuntimeError("no redirect queue available")
     if not html or not html.strip():
-        logger.debug("empty page (probably deleted): %s", smart_str(name))
+        logger.debug("Empty page: %s (probably deleted)", name)
         return
     p = Page(name=name, content=html)
     try:
         p.clean_fields()
     except Exception, e:
-        logger.exception("ERROR importing HTML for %s", name)
+        logger.exception("ERROR cleaning object for page %s", name)
+        logger.debug("Element dump for %s: %s", name, etree.tostring(page_elem))
         return
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
-    logger.debug("Imported page %s", smart_str(name))
+    logger.debug("Imported page %s", name)
 
 
 def convert_edit_type(s):
@@ -1284,7 +1282,7 @@ def process_version_element(version_elem):
 
     # If we already have a version exactly like this, skip
     if Page.versions.filter(name=name, history_comment=history_comment, history_date=history_date).exists():
-        logger.info("version already exists: %s / %s / %s", name, history_comment, history_date)
+        logger.info("Page version already exists: %s version %s (%s)", name, edit_time_epoch, history_comment)
         return
 
     # Set id to 0 because we create historical versions in
@@ -1297,7 +1295,8 @@ def process_version_element(version_elem):
         html = render_wikitext(wikitext, page_slug=slugify(name))
     except Exception, e:
         # render error
-        logger.exception("ERROR rendering wikitext for %s", smart_str(name))
+        logger.exception("ERROR rendering wikitext to HTML for page %s version %s", name, edit_time_epoch)
+        logger.debug("Element dump for %s v %s: %s", name, edit_time_epoch, etree.tostring(version_elem))
         return
 
     if wikitext and wikitext.strip().startswith('#redirect'):
@@ -1313,7 +1312,8 @@ def process_version_element(version_elem):
     try:
         p.clean_fields()
     except Exception, e:
-        logger.exception("ERROR importing HTML for %s", smart_str(name))
+        logger.exception("ERROR cleaning object for page %s version %s", name, edit_time_epoch)
+        logger.debug("Element dump for %s v %s: %s", name, edit_time_epoch, etree.tostring(version_elem))
         return
     html = tidy_html(p.content)
 
@@ -1329,7 +1329,7 @@ def process_version_element(version_elem):
         history_user_ip=history_user_ip
     )
     p_h.save()
-    logger.debug("Imported historical page %s at %s", smart_str(name), history_date)
+    logger.debug("Imported page %s version %s", name, edit_time_epoch)
 
 
 def is_image(filename):
@@ -1425,7 +1425,7 @@ def process_file_element(element):
         m_h.history_user_ip = history_user_ip
         m_h.save()
 
-        logger.debug("slug '%s' filename '%s': file imported",
+        logger.debug("File imported to page %s: %s",
                      slug, filename)
 
 
@@ -1458,7 +1458,7 @@ def process_file_element(element):
         pfile_h = pfile_h.version_info._object.versions.most_recent()
         pfile_h.history_type = 1
         pfile_h.save()
-        logger.debug("slug '%s' filename '%s': historic file imported",
+        logger.debug("Old file imported to page %s: %s",
                      slug, filename)
 
 
@@ -1888,7 +1888,7 @@ def run(*args, **kwargs):
     if disposition.lower() in ['destroy']:
         clear_out_everything()
     else:
-        logger.info("Not clearing everything out due to disposition %s", disposition)
+        logger.warning("Not deleting existing database contents (disposition flag was %s)", disposition)
 
     for group in IMPORT_ORDER:
         for fn in filedict.get(group):
@@ -1956,7 +1956,7 @@ def run(*args, **kwargs):
                 p.daemon = True
                 p.start()
                 cleaners.append(p)
-                logger.info("Started fix_historical_ids background process %s", p)
+                logger.debug("Started cleaner process fix_historical_ids %s", p)
                 last_cleaner_fixids = time.time()
 
             elif (time.time() - last_cleaner_redirs) > 60:
@@ -1964,7 +1964,7 @@ def run(*args, **kwargs):
                 p.daemon = True
                 p.start()
                 cleaners.append(p)
-                logger.info("Started process_redirects background process %s", p)
+                logger.debug("Started cleaner process process_redirects %s", p)
                 last_cleaner_redirs = time.time()
 
 
