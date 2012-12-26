@@ -1546,9 +1546,6 @@ def import_process(items_queue, redirect_queue=None):
                 elif element.tag == 'version':
                     process_version_element(element)
                     life -= 5
-                elif element.tag == 'point':
-                    process_point_element(element)
-                    life -= 1
                 elif element.tag == 'file':
                     process_file_element(element)
                     life -= 25
@@ -1565,8 +1562,7 @@ def import_process(items_queue, redirect_queue=None):
             items_queue.task_done()
             return
 
-def import_from_export_file(import_queue, file_items, page_items, version_items, map_items, redirect_queue):
-
+def import_from_export_file(import_queue, file_items, page_items, version_items, redirect_queue):
     from django.db import close_connection, connection
     close_connection()
     connection.connection = None
@@ -1643,7 +1639,9 @@ def import_from_export_file(import_queue, file_items, page_items, version_items,
                 version_items.put(etree.tostring(element))
 
         elif element.tag == 'point':
-            # A point on a map.  Simple.
+            # A point on a map.  Simple.  Just do it, since we can have
+            # problems if multiple workers are going at once.
+
             # Skip import of historical map point data - not really
             # interesting and it'd be weird because the points are
             # kept separately in the XML dump.  People weren't
@@ -1651,7 +1649,7 @@ def import_from_export_file(import_queue, file_items, page_items, version_items,
             # at the time.
             parent_group = element.getparent()
             if parent_group is not None and parent_group.tag == 'current':
-                map_items.put(etree.tostring(element))
+                process_point_element(element)
 
         elif element.tag == 'file':
             # A file.
@@ -1873,7 +1871,6 @@ def run(*args, **kwargs):
     ingest_queue = JoinableQueue()
     page_items = JoinableQueue()
     version_items = JoinableQueue()
-    map_items = JoinableQueue()
     file_items = JoinableQueue()
     redirect_queue = JoinableQueue()
 
@@ -1882,7 +1879,6 @@ def run(*args, **kwargs):
     cleaners = []
     queues = [('files', file_items,),
               ('pages', page_items,),
-              ('map', map_items,),
               ('versions', version_items,),
              ]
     jobmap = {}
@@ -1923,18 +1919,17 @@ def run(*args, **kwargs):
                 counts[jobmap[importer]] += 1
 
         if len(ingesters) == 0 and not ingest_queue.empty():
-            if file_items.qsize() + page_items.qsize() + version_items.qsize() + map_items.qsize() > 0:
+            if (file_items.qsize() + page_items.qsize() + version_items.qsize()) > 0:
                 logger.debug("Ingester startup delayed until import queues die down...")
             else:
                 # Start an importer
-                p = Process(target=import_from_export_file, args=(ingest_queue, file_items, page_items, version_items, map_items, redirect_queue))
+                p = Process(target=import_from_export_file, args=(ingest_queue, file_items, page_items, version_items, redirect_queue))
                 p.daemon = True
                 p.start()
                 ingesters.append(p)
                 logger.debug("Started XML ingester process %s", p)
 
         # file_items must go before page_items
-        # page_items must go before map_items
         # version_items shouldn't get too far ahead of page_items
         for name, queue in queues:
             logger.debug("Considering %s with %d current importers and %d things in queue", name, counts[name], queue.qsize())
@@ -1977,7 +1972,7 @@ def run(*args, **kwargs):
                 last_cleaner_redirs = time.time()
 
         logger.info("STATUS: XML Ingestion: %d workers, %d files pending", len(ingesters), ingest_queue.qsize())
-        logger.info("STATUS: Data Import: %d workers (%s), queue status: files %d, pages %d, historic pages %d, map points %d, redirects %d", len(importers), '/'.join(['%s %d' % (key, value) for key, value in counts.items()]), file_items.qsize(), page_items.qsize(), version_items.qsize(), map_items.qsize(), redirect_queue.qsize())
+        logger.info("STATUS: Data Import: %d workers (%s), queue status: files %d, pages %d, historic pages %d, redirects %d", len(importers), '/'.join(['%s %d' % (key, value) for key, value in counts.items()]), file_items.qsize(), page_items.qsize(), version_items.qsize(), redirect_queue.qsize())
         logger.info("STATUS: Cleaners: %d workers, fix_historical_ids started %d seconds ago, process_redirects started %d seconds ago", len(cleaners), time.time() - last_cleaner_fixids, time.time() - last_cleaner_redirs)
 
         # Still running?
