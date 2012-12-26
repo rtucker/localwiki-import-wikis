@@ -1522,7 +1522,8 @@ def import_process(items_queue, redirect_queue=None):
     close_connection()
     connection.connection = None
 
-    life = 1000
+    # Self-destroy after some time, to avoid memory leaks
+    life = 10000
     while life > 0:
         try:
             # Pull an item from the queue if there's one available.
@@ -1541,12 +1542,16 @@ def import_process(items_queue, redirect_queue=None):
             with transaction.commit_on_success():
                 if element.tag == 'page':
                     process_page_element(element, redirect_queue)
+                    life -= 5
                 elif element.tag == 'version':
                     process_version_element(element)
+                    life -= 5
                 elif element.tag == 'point':
                     process_point_element(element)
+                    life -= 1
                 elif element.tag == 'file':
                     process_file_element(element)
+                    life -= 25
                 else:
                     logger.error("unknown element tag %s", element.tag)
             items_queue.task_done()
@@ -1559,15 +1564,8 @@ def import_process(items_queue, redirect_queue=None):
             logger.exception("Unknown exception, dying")
             items_queue.task_done()
             return
-        life -= 1
 
 def import_from_export_file(import_queue, file_items, page_items, version_items, map_items, redirect_queue):
-    jobs = []
-    to_start = []
-    n = 0
-    parsing = True
-
-    max_jobs = 4
 
     from django.db import close_connection, connection
     close_connection()
@@ -1582,6 +1580,7 @@ def import_from_export_file(import_queue, file_items, page_items, version_items,
         return
 
     parsing = True
+    n = 0
     parser = etree.iterparse(f, events=("start", "end",), encoding='utf-8', huge_tree=True)
     while parsing:
         try:
@@ -1595,21 +1594,23 @@ def import_from_export_file(import_queue, file_items, page_items, version_items,
             continue
 
         if n % 1000 == 0:
-            logger.info("At element %d: file queue %d, page queue %d, " +
-                        "version queue %d, map queue %d, redirect queue %d",
-                        n, file_items.qsize(), page_items.qsize(),
-                        version_items.qsize(), map_items.qsize(),
-                        redirect_queue.qsize())
+            logger.debug("Ingestion checkpoint: file %s, element %d", fn, n)
 
         n += 1
+
+        PAGE_QUEUE_MAX = 500
+        VERSION_QUEUE_MAX = 20000
+        FILE_QUEUE_MAX = 200
 
         if element.tag == 'page':
             # We have found a page.  We want to isolate this to just the
             # page itself, not the historic versions.  We also want to
             # immediately import the latest version of this page.
-            while page_items.qsize() > 500:
+            flowpause = page_items.qsize() > PAGE_QUEUE_MAX
+            while flowpause:
                 logger.debug("Pausing to let page queue catch up... (count: %d)", page_items.qsize())
-                time.sleep(10)
+                time.sleep(2)
+                flowpause = page_items.qsize() > (PAGE_QUEUE_MAX*0.90)
             leanpage = copy.copy(element)
             first_child = None
             child_count = 0
@@ -1625,10 +1626,11 @@ def import_from_export_file(import_queue, file_items, page_items, version_items,
 
         elif element.tag == 'version' and element.getparent().tag == 'page':
             # We have found a version of a page.
-            while version_items.qsize() > 50000:
+            flowpause = version_items.qsize() > VERSION_QUEUE_MAX
+            while flowpause:
                 logger.debug("Pausing to let version queue catch up... (count: %d)", version_items.qsize())
-                page_items.put(DEATH_SEMAPHORE)
-                time.sleep(10)
+                time.sleep(2)
+                flowpause = version_items.qsize() > (VERSION_QUEUE_MAX*0.90)
             parent_page = element.getparent()
             child_count = 0
             our_position = 0
@@ -1647,16 +1649,17 @@ def import_from_export_file(import_queue, file_items, page_items, version_items,
             # kept separately in the XML dump.  People weren't
             # thinking about map data being independently versioned
             # at the time.
-
             parent_group = element.getparent()
             if parent_group is not None and parent_group.tag == 'current':
                 map_items.put(etree.tostring(element))
 
         elif element.tag == 'file':
             # A file.
-            while file_items.qsize() > 100:
+            flowpause = file_items.qsize() > FILE_QUEUE_MAX
+            while flowpause:
                 logger.debug("Pausing to let file queue catch up... (count: %d)", file_items.qsize())
-                time.sleep(10)
+                time.sleep(2)
+                flowpause = file_items.qsize() > (FILE_QUEUE_MAX*0.90)
             file_items.put(etree.tostring(element))
 
         elif element.tag == 'user':
@@ -1843,31 +1846,31 @@ def identify_file(fn):
             raise RuntimeError("Can't figure out what this file is: %s" % fn)
 
 def run(*args, **kwargs):
-    IMPORT_ORDER = ['users', 'files', 'pages', 'map']
-    max_jobs = 5
+    INGEST_ORDER = ['users', 'files', 'pages', 'map']
+    max_importers = 4
 
     if not args:
         print "usage: localwiki-manage runscript syc_import --script-args=(keep|destroy) exportfiles..."
         return
+
     disposition = args[0]
-
     files = args[1:]
-
     filedict = defaultdict(list)
+
     for fn in files:
         filetype = identify_file(fn)
-        logger.info("Input file of type %s: %s", filetype, fn)
+        logger.info("Will ingest file of type %s: %s", filetype, fn)
         filedict[filetype].append(fn)
 
-    import_queue = JoinableQueue()
+    ingest_queue = JoinableQueue()
     page_items = JoinableQueue()
     version_items = JoinableQueue()
     map_items = JoinableQueue()
     file_items = JoinableQueue()
     redirect_queue = JoinableQueue()
 
+    ingesters = []
     importers = []
-    jobs = []
     cleaners = []
     queues = [('files', file_items,),
               ('pages', page_items,),
@@ -1885,9 +1888,9 @@ def run(*args, **kwargs):
     else:
         logger.warning("Not deleting existing database contents (disposition flag was %s)", disposition)
 
-    for group in IMPORT_ORDER:
+    for group in INGEST_ORDER:
         for fn in filedict.get(group):
-            import_queue.put(fn)
+            ingest_queue.put(fn)
 
     # Run a few subprocesses to handle things.
     running = True
@@ -1895,55 +1898,58 @@ def run(*args, **kwargs):
         # Clean up dead processes
         for cleaner in cleaners:
             if not cleaner.is_alive():
-                logger.info("Reaping dead cleaner %s", cleaner)
+                logger.debug("Reaping dead cleaner %s", cleaner)
                 cleaners.remove(cleaner)
+        for ingester in ingesters:
+            if not ingester.is_alive():
+                logger.debug("Reaping dead ingester %s", ingester)
+                ingesters.remove(ingester)
+        counts = defaultdict(int)
         for importer in importers:
             if not importer.is_alive():
-                logger.info("Reaping dead importer %s", importer)
+                logger.debug("Reaping dead importer %s", importer)
                 importers.remove(importer)
-        counts = defaultdict(int)
-        for job in jobs:
-            if not job.is_alive():
-                logger.info("Reaping dead handler %s", job)
-                jobs.remove(job)
-                if job in jobmap:
-                    del jobmap[job]
-            if job in jobmap:
-                counts[jobmap[job]] += 1
+                if importer in jobmap:
+                    del jobmap[importer]
+            if importer in jobmap:
+                counts[jobmap[importer]] += 1
 
-        if len(importers) == 0 and not import_queue.empty():
-            # Start an importer
-            p = Process(target=import_from_export_file, args=(import_queue, file_items, page_items, version_items, map_items, redirect_queue))
-            p.daemon = True
-            p.start()
-            importers.append(p)
-            logger.info("Started importer process %s", p)
+        if len(ingesters) == 0 and not ingest_queue.empty():
+            if file_items.qsize() + page_items.qsize() + version_items.qsize() + map_items.qsize() > 0:
+                logger.debug("Ingester startup delayed until import queues die down...")
+            else:
+                # Start an importer
+                p = Process(target=import_from_export_file, args=(ingest_queue, file_items, page_items, version_items, map_items, redirect_queue))
+                p.daemon = True
+                p.start()
+                ingesters.append(p)
+                logger.debug("Started XML ingester process %s", p)
 
         # file_items must go before page_items
         # page_items must go before map_items
         # version_items shouldn't get too far ahead of page_items
         for name, queue in queues:
+            logger.debug("Considering %s with %d current importers and %d things in queue", name, counts[name], queue.qsize())
             if queue.empty():
                 continue
 
-            logger.debug("Considering %s with %d current jobs", name, counts[name])
             assassination = False
 
             if counts[name] < 1:
                 for cname, cqueue in queues:
                     if counts[cname] > 1:
                         cqueue.put(DEATH_SEMAPHORE)
-                        logger.warning("%s has no handlers, even though there are %d items in queue!  Assassinating %s", name, queue.qsize(), cname)
+                        logger.warning("%s has no processes, even though there are %d items in queue!  Assassinating %s", name, queue.qsize(), cname)
                         assassination = True
                         break
 
-            if (len(jobs) < max_jobs and queue.qsize() > len(jobs)) or assassination:
+            if (len(importers) < max_importers and queue.qsize() > len(importers)) or assassination:
                 p = Process(target=import_process, args=(queue, redirect_queue,))
                 p.daemon = True
                 p.start()
-                jobs.append(p)
+                importers.append(p)
                 jobmap[p] = name
-                logger.info("Starting %s job runner process %s", name, p)
+                logger.debug("Starting %s data import process %s", name, p)
 
         if len(cleaners) == 0:
             if (time.time() - last_cleaner_fixids) > 300 and last_cleaner_fixids < last_cleaner_redirs:
@@ -1962,15 +1968,13 @@ def run(*args, **kwargs):
                 logger.debug("Started cleaner process process_redirects %s", p)
                 last_cleaner_redirs = time.time()
 
-
-        logger.info("Importer processes: %d, Job runners: %d (%s), Cleaners: %d", len(importers), len(jobs), dict(counts), len(cleaners))
-        logger.info("Import queue: %d, File queue: %d, Page queue: %d, Version queue: %d, Map queue: %d, Redirect queue: %d",
-                    import_queue.qsize(), file_items.qsize(), page_items.qsize(), version_items.qsize(), map_items.qsize(), redirect_queue.qsize())
-        logger.info("Last ran fix_historical_ids %d ago, process_redirects %d ago", time.time() - last_cleaner_fixids, time.time() - last_cleaner_redirs)
+        logger.info("STATUS: XML Ingestion: %d workers, %d files pending", len(ingesters), ingest_queue.qsize())
+        logger.info("STATUS: Data Import: %d workers (%s), queue status: files %d, pages %d, historic pages %d, map points %d, redirects %d", len(importers), '/'.join(['%s %d' % (key, value) for key, value in counts.items()]), file_items.qsize(), page_items.qsize(), version_items.qsize(), map_items.qsize(), redirect_queue.qsize())
+        logger.info("STATUS: Cleaners: %d workers, fix_historical_ids started %d seconds ago, process_redirects started %d seconds ago", len(cleaners), time.time() - last_cleaner_fixids, time.time() - last_cleaner_redirs)
 
         # Still running?
-        still_to_do = len(importers) + len(cleaners) + len(jobs)
-        still_to_do += import_queue.qsize()
+        still_to_do = len(ingesters) + len(cleaners) + len(importers)
+        still_to_do += ingest_queue.qsize()
         for name, queue in queues:
             still_to_do += queue.qsize()
 
