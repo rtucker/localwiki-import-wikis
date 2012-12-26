@@ -1724,9 +1724,11 @@ def process_redirects(redirect_queue, midflight=False):
     # versions will note that the page used to be a redirect in the page
     # history.
     from django.contrib.auth.models import User
+    from pages.models import Page, slugify
+    from redirects.models import Redirect
+    from django.db import close_connection, connection, transaction
 
     # The database connection from this process may be stale
-    from django.db import close_connection, connection
     close_connection()
     connection.connection = None
 
@@ -1746,7 +1748,7 @@ def process_redirects(redirect_queue, midflight=False):
             running = False
         try:
             from_pagename, to_pagename = redirect_queue.get(timeout=10)
-            logger.debug("begin processing redirect: %s -> %s", from_pagename, to_pagename)
+            logger.debug("Begin processing redirect: %s -> %s", from_pagename, to_pagename)
             remain -= 1
         except Empty:
             return
@@ -1756,7 +1758,7 @@ def process_redirects(redirect_queue, midflight=False):
             redir_date = to_page.versions.latest('history_date').history_date
         except Page.DoesNotExist:
             if midflight:
-                logger.debug("Recirculating premature redirect: %s -> %s", from_pagename, to_pagename)
+                logger.debug("Recirculating redirect to page which does not exist yet: %s -> %s", from_pagename, to_pagename)
                 redirect_queue.put((from_pagename, to_pagename))
                 redirect_queue.task_done()
                 continue
@@ -1765,11 +1767,17 @@ def process_redirects(redirect_queue, midflight=False):
                 redirect_queue.task_done()
                 continue
 
-        if redir_date is None and midflight:
-            logger.debug("Recirculating redirect to page without history: %s -> %s", from_pagename, to_pagename)
-            redirect_queue.put((from_pagename, to_pagename))
-            redirect_queue.task_done()
-            continue
+        if midflight:
+            if redir_date is None:
+                logger.debug("Recirculating redirect to page without history: %s -> %s", from_pagename, to_pagename)
+                redirect_queue.put((from_pagename, to_pagename))
+                redirect_queue.task_done()
+                continue
+            if 0 in to_page.versions.values_list('id', flat=True):
+                logger.debug("Recirculating redirect to page with dirty history: %s -> %s", from_pagename, to_pagename)
+                redirect_queue.put((from_pagename, to_pagename))
+                redirect_queue.task_done()
+                continue
         elif redir_date is None:
             redir_date = datetime.datetime.now()
 
