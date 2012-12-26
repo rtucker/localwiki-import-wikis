@@ -1740,10 +1740,13 @@ def process_redirects(redirect_queue, midflight=False):
         u.save()
 
     remain = redirect_queue.qsize()
-    running = True
-    while running:
+    while True:
         if midflight and remain < 1:
-            running = False
+            # In this mode, we put stuff we couldn't handle back onto the
+            # queue.  This keeps us from looping infinitely.
+            return
+
+        # Pull an item from the queue, if possible.
         try:
             from_pagename, to_pagename = redirect_queue.get(timeout=10)
             logger.debug("Begin processing redirect: %s -> %s", from_pagename, to_pagename)
@@ -1751,12 +1754,21 @@ def process_redirects(redirect_queue, midflight=False):
         except Empty:
             return
 
-        try:
-            to_page = Page.objects.get(name=to_pagename)
-            redir_date = to_page.versions.latest('history_date').history_date
-        except Page.DoesNotExist:
+        # We are either going to point at a page or a redirect.
+        to_page_qs = Page.objects.filter(slug=slugify(to_pagename))
+        to_redir_qs = Redirect.objects.filter(source=slugify(to_pagename))
+
+        if to_page_qs.exists():
+            # We have our target, run with it.
+            to_page = to_page_qs.get()
+        elif to_redir_qs.exists():
+            # We are redirecting to a redirect, awesome.
+            to_page = to_redir_qs.get().destination
+            logger.debug("Double-redirect resolved: %s -> %s -> %s", from_pagename, to_pagename, to_page.name)
+        else:
+            # No idea where we're going yet.
             if midflight:
-                logger.debug("Recirculating redirect to page which does not exist yet: %s -> %s", from_pagename, to_pagename)
+                logger.debug("Deferring redirect to page which does not exist yet: %s -> %s", from_pagename, to_pagename)
                 redirect_queue.put((from_pagename, to_pagename))
                 redirect_queue.task_done()
                 continue
@@ -1765,29 +1777,31 @@ def process_redirects(redirect_queue, midflight=False):
                 redirect_queue.task_done()
                 continue
 
+        # Get a date for the redirect, so we don't pollute Recent Changes
+        redir_date = to_page.versions.latest('history_date').history_date
         if midflight:
-            if redir_date is None:
-                logger.debug("Recirculating redirect to page without history: %s -> %s", from_pagename, to_pagename)
-                redirect_queue.put((from_pagename, to_pagename))
-                redirect_queue.task_done()
-                continue
-            if 0 in to_page.versions.values_list('id', flat=True):
-                logger.debug("Recirculating redirect to page with dirty history: %s -> %s", from_pagename, to_pagename)
+            # If we're running before the page has met fix_historical_ids,
+            # bad things happen.  Catch those bad things.
+            if (redir_date is None) or (0 in to_page.versions.values_list('id', flat=True)):
+                logger.debug("Deferring redirect to page without history: %s -> %s", from_pagename, to_pagename)
                 redirect_queue.put((from_pagename, to_pagename))
                 redirect_queue.task_done()
                 continue
         elif redir_date is None:
             redir_date = datetime.datetime.now()
 
+        # We can't redirect to ourselves, duh
         if slugify(from_pagename) == to_page.slug:
             logger.error("Redirect of %s -> %s illogical (equal slugs)", from_pagename, to_page)
             redirect_queue.task_done()
             continue
+
+        # Create the redirect.  Note that we aren't using get_or_create here
+        # so that we can explicitly define our history.
         if not Redirect.objects.filter(source=slugify(from_pagename)).exists():
             with transaction.commit_on_success():
                 r = Redirect(source=slugify(from_pagename), destination=to_page)
-                # XXX: Keeps throwing: ValueError: Cannot assign None: "Redirect_hist.destination" does not allow null values.
-                r.save(user=u, comment="Automated edit. Creating redirect.",
+                r.save(user=u, comment="Automated edit: Creating redirect.",
                        date=redir_date)
                 logger.debug("Redirected: %s -> %s", from_pagename, to_pagename)
         redirect_queue.task_done()
