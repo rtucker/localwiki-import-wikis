@@ -1821,33 +1821,22 @@ def fix_historical_ids():
 
     fixed = 0
     logger.info("Fixing historical ids")
-    id_map = {}
-    for ph in Page.versions.all().defer('content').iterator():
-        if ph.slug not in id_map:
-            ps = Page.objects.filter(slug=ph.slug)
-            if ps:
-                id_map[ph.slug] = ps[0].id
+    for ph in Page.versions.filter(id=0).defer('content').iterator():
+        ps = Page.objects.filter(slug=ph.slug)
+        if ps.exists():
+            ph.id = ps.get().id
+            ph.save()
+            fixed += 1
 
-        if ph.slug in id_map:
-            if ph.id != id_map[ph.slug]:
-                ph.id = id_map[ph.slug]
-                ph.save()
-                fixed += 1
-
-    id_map = {}
-    for ph in PageFile.versions.all().iterator():
-        if (ph.name, ph.slug) not in id_map:
-            ps = PageFile.objects.filter(name=ph.name, slug=ph.slug)
-            if ps:
-                id_map[(ph.name, ph.slug)] = ps[0].id
-
-        if (ph.name, ph.slug) in id_map:
-            if ph.id != id_map[(ph.name, ph.slug)]:
-                ph.id = id_map[(ph.name, ph.slug)]
-                ph.save()
-                fixed += 1
+    for ph in PageFile.versions.filter(id=0).iterator():
+        ps = PageFile.objects.filter(name=ph.name, slug=ph.slug)
+        if ps.exists():
+            ph.id = ps.get().id
+            ph.save()
+            fixed += 1
 
     logger.info("Fixed historical IDs on %d versions", fixed)
+
 
 def turn_off_search():
     haystack_site.unregister(Page)
@@ -1867,7 +1856,7 @@ def identify_file(fn):
 
 def run(*args, **kwargs):
     INGEST_ORDER = ['users', 'files', 'pages', 'map']
-    max_importers = 4
+    max_importers = 3
 
     if not args:
         print "usage: localwiki-manage runscript syc_import --script-args=(keep|destroy) exportfiles..."
