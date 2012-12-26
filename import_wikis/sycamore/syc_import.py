@@ -663,7 +663,7 @@ class Formatter(sycamore_HTMLFormatter):
 
     def process_comments_macro(self, macro_obj, name, args):
         title = (args and args.strip()) or "Comments"
-        return "<h2>%s</h2>" % title
+        return '<h2 class="plugin commentbox">%s</h2>' % title
 
     def process_nbsp_macro(self, macro_obj, name, args):
         return '&nbsp;'
@@ -1153,14 +1153,7 @@ def tidy_html(s):
 
 
 def reformat_wikitext(s):
-    if not s:
-        return s
-    # Remove comments macro when it's the last thing on the page.
-    # TODO: remove this if/when we have a comments function.
-    r = re.compile('\s{0,2}\[\[comments\]\]\s*$', re.IGNORECASE)
-    s = r.sub('', s)
-    r = re.compile('\s{0,2}\[\[comments(.*)\]\]\s*$', re.IGNORECASE)
-    s = r.sub('', s)
+    # This function previously removed standalone Comments tags.
     return s
 
 
@@ -1305,7 +1298,9 @@ def process_version_element(version_elem):
     	to_page = line[line.find('#redirect')+10:]
         html = '<p>This version of the page was a redirect.  See <a href="%s">%s</a>.</p>' % (to_page, to_page)
     if not html or not html.strip():
-        logger.info("empty page version: %s (%s)", smart_str(name), history_date)
+        logger.error("Inserting placeholder text at empty page version: %s version %s", name, edit_time_epoch)
+        logger.debug("Element dump for %s v %s: %s", name, edit_time_epoch, etree.tostring(version_elem))
+        html = '<p>This version of the page was either intentionally left blank, or could not be parsed during import.</p>'
 
     # Create a dummy Page object to get the correct cleaning behavior
     p = Page(name=name, content=html)
