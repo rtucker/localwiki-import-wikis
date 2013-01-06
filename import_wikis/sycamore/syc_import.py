@@ -1204,25 +1204,28 @@ def render_wikitext(text, strong=True, page_slug=None, isolating_comments=False)
     return wiki_html
 
 
-def parse_comment_p(elem):
-    if len(elem.getchildren()) < 2:
-        return None
-    childs = elem.getchildren()
-    first_child = childs[0]
-    last_child = childs[-1]
+def parse_comment_list(elem_list):
+    # We have a list of one or more <p> elements, corresponding to a comment.
+    # The first will have an <em> child with a datetime.
+    # The last will have a <a> child with user information.
+    first_children = elem_list[0].getchildren()
+    last_children = elem_list[-1].getchildren()
+    first_child = first_children[0]
+    last_child = last_children[-1]
     if first_child.tag != 'em' or last_child.tag != 'a':
         return None
 
     try:
         dttm = dateutil.parser.parse(first_child.text)
         user = last_child.attrib['href']
-        elem.remove(last_child)
-        text = etree.tostring(elem)
+        elem_list[-1].remove(last_child)
+        text = ''.join([etree.tostring(elem) for elem in elem_list])
         text = re.sub('<em>.+</em>( \&\#160\;)?', '', text)
         text = re.sub('\&\#8212\;</p>', '</p>', text)
         return (dttm, user, text)
     except:
         return None
+
 
 def isolate_comments(text):
     """Returns a hunk of HTML without comments, the label to use for comment
@@ -1235,6 +1238,8 @@ def isolate_comments(text):
     label = None
     comments = []
     in_comments = False
+    in_a_comment = False
+    comment_list = []
 
     element_list = etree.HTML(text).find('body').getchildren()
     for element in element_list:
@@ -1246,19 +1251,27 @@ def isolate_comments(text):
             continue
 
         if in_comments:
-            if element.tag == 'hr':
+            if element.tag == 'hr' and in_a_comment:
+                in_a_comment = False
+            elif element.tag == 'hr':
+                # May be the first one
                 pass
             elif element.tag == 'p':
-                # Ahh, a comment.
-                result = parse_comment_p(element)
+                in_a_comment = True
+                comment_list.append(element)
+            else:
+                # utoh, I think we're done.
+                in_comments = False
+                in_a_comment = False
+
+            if not in_a_comment and len(comment_list) > 0:
+                result = parse_comment_list(comment_list)
+                comment_list = []
                 if result is None:
                     # Freak out
                     in_comments = False
                 else:
                     comments.append(result)
-            else:
-                # utoh, I think we're done.
-                in_comments = False
 
         if not in_comments:
             not_comments.append(element)
