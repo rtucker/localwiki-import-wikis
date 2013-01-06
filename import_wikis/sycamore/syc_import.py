@@ -55,6 +55,7 @@ import logging
 
 import re
 import datetime
+import dateutil
 import urllib
 import copy
 from lxml import etree
@@ -223,6 +224,8 @@ class Formatter(sycamore_HTMLFormatter):
     def __init__(self, *args, **kwargs):
         if 'page_slug' in kwargs:
             self.page_slug = kwargs.pop('page_slug')
+        self._is_isolating_comments = kwargs.pop('isolating_comments', False)
+
         sycamore_HTMLFormatter.__init__(self, *args, **kwargs)
 
     def setPage(self, page):
@@ -662,8 +665,23 @@ class Formatter(sycamore_HTMLFormatter):
         return html
 
     def process_comments_macro(self, macro_obj, name, args):
+        """We'll generally see something like:
+            [[Comments]]
+            ------
+            ''2010-04-16 17:42:04'' [[nbsp]] Long time fan of DQ - the
+            Blizzards are great, my favorites include the Butterfinger
+            Blizzard and the Cappuccino-Heath Blizzard. Hoping an investor
+            takes note (:>) --["Users/BradMandell"]
+        (with zero or more comments, prefixed by ------.
+
+        If we're aiming to extract the comments out, we'll put an ugly-ass
+        flag here so we know what to look for.
+        """
         title = (args and args.strip()) or "Comments"
-        return '<h2 class="plugin commentbox">%s</h2>' % title
+        if self._is_isolating_comments:
+            return '\nXXXCOMMENTSXXX: %s\n' % title
+        else:
+            return '<h2 class="plugin commentbox">%s</h2>' % title
 
     def process_nbsp_macro(self, macro_obj, name, args):
         return '&nbsp;'
@@ -1157,7 +1175,7 @@ def reformat_wikitext(s):
     return s
 
 
-def render_wikitext(text, strong=True, page_slug=None):
+def render_wikitext(text, strong=True, page_slug=None, isolating_comments=False):
     from Sycamore.request import RequestDummy
     from Sycamore.Page import Page
     from Sycamore.user import User
@@ -1172,7 +1190,7 @@ def render_wikitext(text, strong=True, page_slug=None):
     request.user = User(request)
     request.user.may = AllPermissions(request.user)
     request.theme.make_icon = return_empty_string
-    formatter = Formatter(request, page_slug=page_slug)
+    formatter = Formatter(request, page_slug=page_slug, isolating_comments=isolating_comments)
     page = Page("PAGENAME", request)
 
     wiki_html = sycamore_wikifyString(text, request, page,
@@ -1186,7 +1204,68 @@ def render_wikitext(text, strong=True, page_slug=None):
     return wiki_html
 
 
-def process_page_element(page_elem, redirect_queue=None):
+def parse_comment_p(elem):
+    if len(elem.getchildren()) < 2:
+        return None
+    childs = elem.getchildren()
+    first_child = childs[0]
+    last_child = childs[-1]
+    if first_child.tag != 'em' or last_child.tag != 'a':
+        return None
+
+    try:
+        dttm = dateutil.parser.parse(first_child.text)
+        user = last_child.attrib['href']
+        elem.remove(last_child)
+        text = etree.tostring(elem)
+        text = re.sub('<em>.+</em>( \&\#160\;)?', '', text)
+        text = re.sub('\&\#8212\;</p>', '</p>', text)
+        return (dttm, user, text)
+    except:
+        return None
+
+def isolate_comments(text):
+    """Returns a hunk of HTML without comments, the label to use for comment
+       boxes, and a list of comments."""
+
+    if (text is None) or (not 'XXXCOMMENTSXXX' in text):
+        return (text, None, [])
+
+    not_comments = []
+    label = None
+    comments = []
+    in_comments = False
+
+    element_list = etree.HTML(text).find('body').getchildren()
+    for element in element_list:
+        if element.tag is 'p' and element.text is not None and 'XXXCOMMENTSXXX' in element.text:
+            # Jackpot
+            in_comments = True
+            contents = element.text.strip()
+            label = contents.split(' ', 1)[1]
+            continue
+
+        if in_comments:
+            if element.tag == 'hr':
+                pass
+            elif element.tag == 'p':
+                # Ahh, a comment.
+                result = parse_comment_p(element)
+                if result is None:
+                    # Freak out
+                    in_comments = False
+                else:
+                    comments.append(result)
+            else:
+                # utoh, I think we're done.
+                in_comments = False
+
+        if not in_comments:
+            not_comments.append(element)
+
+    return ('\n'.join([etree.tostring(x) for x in not_comments]), label, comments)
+
+def process_page_element(page_elem, redirect_queue=None, comment_queue=None):
     # We import a page in a few different phases.
     # We first pull in the raw wiki text, then we render it using the
     # Sycamore parser and a modified Sycamore formatter (which does the HTML
@@ -1196,13 +1275,21 @@ def process_page_element(page_elem, redirect_queue=None):
     # mix and match to get the best result.
     logger = logging.getLogger(__name__ + '.process_page_element')
     name = normalize_pagename(page_elem.attrib['propercased_name'])
+
+    try:
+        # If comments support is enabled, handle the comments.
+        from comments.models import CommentConfiguration
+        do_comments = True
+    except ImportError:
+        do_comments = False
+
     if Page.objects.filter(slug=slugify(name)).exists():
         logger.info("Page already exists: %s", name)
         return
     try:
         wikitext = page_elem.find('text').text
         wikitext = reformat_wikitext(wikitext)
-        html = render_wikitext(wikitext, page_slug=slugify(name))
+        html = render_wikitext(wikitext, page_slug=slugify(name), isolating_comments=do_comments)
     except Exception, e:
         # render error
         logger.exception("ERROR rendering wikitext to HTML for page %s", name)
@@ -1222,6 +1309,15 @@ def process_page_element(page_elem, redirect_queue=None):
     if not html or not html.strip():
         logger.debug("Empty page: %s (probably deleted)", name)
         return
+
+    if do_comments:
+        html, comment_label, comments = isolate_comments(html)
+        if html is not None and html.strip() == '':
+            html = '<!-- placeholder for empty page content -->'
+    else:
+        comment_label = None
+        comments = []
+
     p = Page(name=name, content=html)
     try:
         p.clean_fields()
@@ -1232,6 +1328,88 @@ def process_page_element(page_elem, redirect_queue=None):
     p.content = tidy_html(p.content)
     p.save(track_changes=False)
     logger.debug("Imported page %s", name)
+
+    if comment_label is not None:
+        # make it short enough to fit, if it's too long
+        comment_label = comment_label[:230]
+        qs = CommentConfiguration.objects.filter(page=p)
+        if qs.exists():
+            cc = qs.get()
+        else:
+            cc = CommentConfiguration(page=p)
+
+        cc.enabled = True
+        cc.heading = comment_label
+        cc.save(track_changes=False)
+        logger.debug("Updated CommentConfiguration for page %s (comment heading: %s)", name, comment_label)
+
+    for comment_dttm, comment_username, comment_text in comments:
+        if comment_queue is not None:
+            comment_queue.put((p.id, comment_dttm, comment_username, comment_text))
+
+
+def import_comment(page_id, dttm, username, text):
+    from django.contrib.auth.models import User
+    from pages.models import Page
+    from comments.models import Comment
+
+    if username.lower().startswith('users/'):
+        username = username[len('users/'):]
+    comment_user = User.objects.filter(username__iexact=username)
+    if comment_user.exists():
+        comment_user = comment_user.get()
+    else:
+        comment_user = None
+        text += ' <em>This comment was written by %s.</em>' % username
+
+    p = Page.objects.get(id=page_id)
+
+    if Comment.versions.filter(page=p, history_date=dttm, history_user=comment_user).exists():
+        # We already have a version of this comment
+        logger.debug("Not importing duplicate comment on page %s: date=%s, user=%s / %s", p.slug, dttm, username, comment_user)
+    else:
+        with transaction.commit_on_success():
+            c = Comment(page=p, content=text)
+            c.save(date=dttm, comment="Comment added", user=comment_user)
+            logger.debug("Imported comment on page %s: date=%s, user=%s / %s", p.slug, dttm, username, comment_user)
+
+
+def process_comments(comment_queue, recirculate_queue=None, midflight=False):
+    from pages.models import Page
+    from django.db import close_connection, connection
+
+    close_connection()
+    connection.connection = None
+    logger = logging.getLogger(__name__ + '.process_comments')
+
+    logger.debug("process_comments: %d to process", comment_queue.qsize())
+    remain = comment_queue.qsize()
+    while True:
+        if remain < 0 and midflight:
+            logger.debug("process_comments: stopping due to tail-biting (remain < 0)")
+            break
+
+        try:
+            page_id, dttm, username, text = comment_queue.get(timeout=1)
+            remain -= 1
+        except Empty:
+            logger.debug("process_comments: queue got empty")
+            break
+
+        if Page.versions.filter(id=page_id).exists():
+            logger.debug("process_comments: processing page_id %d dttm %s by %s (remaining = %d)", page_id, dttm, username, comment_queue.qsize())
+            import_comment(page_id, dttm, username, text)
+            comment_queue.task_done()
+        elif midflight and recirculate_queue is not None:
+            logger.debug("process_comments: could not find versions for page_id %d, requeuing (remaining = %d)", page_id, comment_queue.qsize())
+            recirculate_queue.put((page_id, dttm, username, text))
+            comment_queue.task_done()
+        else:
+            logger.error("process_comments: could not find versions for page_id %d, dropping comment! dttm=%s username=%s content=%s", page_id, dttm, username, text)
+            comment_queue.task_done()
+
+
+    logger.debug("process_comments: done")
 
 
 def convert_edit_type(s):
@@ -1514,7 +1692,7 @@ def process_point_element(element):
 
         logger.debug("Map point %g %g created on %s", x, y, smart_str(element.attrib['pagename']))
 
-def import_process(items_queue, redirect_queue=None):
+def import_process(items_queue, redirect_queue=None, comment_queue=None):
     """Subprocess to handle importing of content."""
     # Break old database connections, because we're probably not running
     # in the same process any more.
@@ -1541,7 +1719,7 @@ def import_process(items_queue, redirect_queue=None):
             # Handle the element, ensuring that we commit ASAP
             with transaction.commit_on_success():
                 if element.tag == 'page':
-                    process_page_element(element, redirect_queue)
+                    process_page_element(element, redirect_queue, comment_queue)
                     life -= 5
                 elif element.tag == 'version':
                     process_version_element(element)
@@ -1696,6 +1874,15 @@ def clear_out_everything():
 
     logger.info("Deleted %d underlying PageFile objects", n)
 
+    try:
+        # If comment support is enabled, nuke the comments
+        from comments.models import Comment
+        for table in ['comments_comment', 'comments_comment_hist', 'comments_commentconfiguration', 'comments_commentconfiguration_hist']:
+            cursor.execute("DELETE FROM %s" % table)
+            logger.info("Deleted all rows from table %s", table)
+    except ImportError:
+        logger.info("Comment support not enabled, not deleting comments.")
+
     for table in ['maps_mapdata', 'maps_mapdata_hist', 'tags_pagetagset',
                   'tags_pagetagset_tags', 'tags_tag',
                   'tags_pagetagset_hist', 'tags_pagetagset_hist_tags',
@@ -1714,7 +1901,7 @@ def clear_out_everything():
 
     logger.info("Done clearing out old data.")
 
-def process_redirects(redirect_queue, midflight=False):
+def process_redirects(redirect_queue, redirect_recirc_queue=None, midflight=False):
     # We create the Redirects here.  We don't try and port over the
     # version information for the formerly-page-based redirects, as that
     # is 1) not very important 2) preserved via the page content, in
@@ -1767,9 +1954,9 @@ def process_redirects(redirect_queue, midflight=False):
             logger.debug("Double-redirect resolved: %s -> %s -> %s", from_pagename, to_pagename, to_page.name)
         else:
             # No idea where we're going yet.
-            if midflight:
+            if midflight and redirect_recirc_queue is not None:
                 logger.debug("Deferring redirect to page which does not exist yet: %s -> %s", from_pagename, to_pagename)
-                redirect_queue.put((from_pagename, to_pagename))
+                redirect_recirc_queue.put((from_pagename, to_pagename))
                 redirect_queue.task_done()
                 continue
             else:
@@ -1779,12 +1966,12 @@ def process_redirects(redirect_queue, midflight=False):
 
         # Get a date for the redirect, so we don't pollute Recent Changes
         redir_date = to_page.versions.latest('history_date').history_date
-        if midflight:
+        if midflight and redirect_recirc_queue is not None:
             # If we're running before the page has met fix_historical_ids,
             # bad things happen.  Catch those bad things.
             if (redir_date is None) or (0 in to_page.versions.values_list('id', flat=True)):
                 logger.debug("Deferring redirect to page without history: %s -> %s", from_pagename, to_pagename)
-                redirect_queue.put((from_pagename, to_pagename))
+                redirect_recirc_queue.put((from_pagename, to_pagename))
                 redirect_queue.task_done()
                 continue
         elif redir_date is None:
@@ -1876,6 +2063,9 @@ def run(*args, **kwargs):
     version_items = JoinableQueue()
     file_items = JoinableQueue()
     redirect_queue = JoinableQueue()
+    redirect_recirc_queue = JoinableQueue()
+    comment_queue = JoinableQueue()
+    comment_recirc_queue = JoinableQueue()
 
     ingesters = []
     importers = []
@@ -1888,6 +2078,7 @@ def run(*args, **kwargs):
 
     last_cleaner_fixids = time.time()
     last_cleaner_redirs = time.time()
+    last_cleaner_comments = time.time()
 
     turn_off_search()
     if disposition.lower() in ['destroy']:
@@ -1907,6 +2098,8 @@ def run(*args, **kwargs):
             if not cleaner.is_alive():
                 logger.debug("Reaping dead cleaner %s", cleaner)
                 cleaners.remove(cleaner)
+            else:
+                logger.debug("Cleaner still alive: %s", cleaner)
         for ingester in ingesters:
             if not ingester.is_alive():
                 logger.debug("Reaping dead ingester %s", ingester)
@@ -1926,7 +2119,7 @@ def run(*args, **kwargs):
                 logger.debug("Ingester startup delayed until import queues die down...")
             else:
                 # Start an importer
-                p = Process(target=import_from_export_file, args=(ingest_queue, file_items, page_items, version_items, redirect_queue))
+                p = Process(target=import_from_export_file, name="xml_ingester", args=(ingest_queue, file_items, page_items, version_items, redirect_queue))
                 p.daemon = True
                 p.start()
                 ingesters.append(p)
@@ -1950,7 +2143,7 @@ def run(*args, **kwargs):
                         break
 
             if (len(importers) < max_importers and queue.qsize() > len(importers)) or assassination:
-                p = Process(target=import_process, args=(queue, redirect_queue,))
+                p = Process(target=import_process, name="%s_importer" % name, args=(queue, redirect_queue, comment_queue,))
                 p.daemon = True
                 p.start()
                 importers.append(p)
@@ -1958,25 +2151,51 @@ def run(*args, **kwargs):
                 logger.debug("Starting %s data import process %s", name, p)
 
         if len(cleaners) == 0:
-            if (time.time() - last_cleaner_fixids) > 300 and last_cleaner_fixids < last_cleaner_redirs:
-                p = Process(target=fix_historical_ids)
+            if (time.time() - last_cleaner_fixids) > 300:
+                p = Process(target=fix_historical_ids, name="fix_historical_ids")
                 p.daemon = True
                 p.start()
                 cleaners.append(p)
                 logger.debug("Started cleaner process fix_historical_ids %s", p)
                 last_cleaner_fixids = time.time()
 
+            elif (time.time() - last_cleaner_comments) > 90:
+                p = Process(target=process_comments, args=(comment_queue, comment_recirc_queue, True), name="process_comments")
+                p.daemon = True
+                p.start()
+                cleaners.append(p)
+                logger.debug("Started cleaner process process_comments %s", p)
+                last_cleaner_comments = time.time()
+
             elif (time.time() - last_cleaner_redirs) > 60:
-                p = Process(target=process_redirects, args=(redirect_queue, True,))
+                p = Process(target=process_redirects, args=(redirect_queue, redirect_recirc_queue, True,), name="process_redirects")
                 p.daemon = True
                 p.start()
                 cleaners.append(p)
                 logger.debug("Started cleaner process process_redirects %s", p)
                 last_cleaner_redirs = time.time()
 
+        # Handle our recirculating queues.
+        # When we put something onto a queue in another process, that process
+        # joins the queue before terminating.  This is a problem, which we can
+        # hopefully avoid by putting stuff onto a second queue.
+        while True:
+            try:
+                comment_queue.put(comment_recirc_queue.get(timeout=1))
+                comment_recirc_queue.task_done()
+            except Empty:
+                break
+        while True:
+            try:
+                redirect_queue.put(redirect_recirc_queue.get(timeout=1))
+                redirect_recirc_queue.task_done()
+            except Empty:
+                break
+
+
         logger.info("STATUS: XML Ingestion: %d workers, %d files pending", len(ingesters), ingest_queue.qsize())
-        logger.info("STATUS: Data Import: %d workers (%s), queue status: files %d, pages %d, historic pages %d, redirects %d", len(importers), '/'.join(['%s %d' % (key, value) for key, value in counts.items()]), file_items.qsize(), page_items.qsize(), version_items.qsize(), redirect_queue.qsize())
-        logger.info("STATUS: Cleaners: %d workers, fix_historical_ids started %d seconds ago, process_redirects started %d seconds ago", len(cleaners), time.time() - last_cleaner_fixids, time.time() - last_cleaner_redirs)
+        logger.info("STATUS: Data Import: %d workers (%s), queue status: files %d, pages %d, historic pages %d, redirects %d, comments %d", len(importers), '/'.join(['%s %d' % (key, value) for key, value in counts.items()]), file_items.qsize(), page_items.qsize(), version_items.qsize(), redirect_queue.qsize(), comment_queue.qsize())
+        logger.info("STATUS: Cleaners: %d workers, fix_historical_ids started %d seconds ago, process_redirects started %d seconds ago, process_comments started %d seconds ago", len(cleaners), time.time() - last_cleaner_fixids, time.time() - last_cleaner_redirs, time.time() - last_cleaner_comments)
 
         # Still running?
         still_to_do = len(ingesters) + len(cleaners) + len(importers)
@@ -1992,3 +2211,5 @@ def run(*args, **kwargs):
     fix_historical_ids()
     logger.info("Final run of process_redirects")
     process_redirects(redirect_queue)
+    logger.info("Final run of process_comments")
+    process_comments(comment_queue)
