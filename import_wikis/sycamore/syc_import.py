@@ -478,7 +478,7 @@ class Formatter(sycamore_HTMLFormatter):
 
     def process_file_macro(self, macro_obj, name, args):
         filename = args
-	try:
+        try:
             file = PageFile.objects.get(slug=self.page_slug, name=filename)
         except:
             # File doesn't exist, was just a macro reference to an
