@@ -1337,7 +1337,7 @@ def is_image(filename):
 
 
 def process_user_element(element):
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User, Group
     logger = logging.getLogger(__name__ + '.process_user_element')
 
     parent = element.getparent()
@@ -1363,6 +1363,8 @@ def process_user_element(element):
         if enc_password != '':
             u.password = enc_password
         u.save()
+        g = Group.objects.get(name="Authenticated")
+        u.groups.add(g)
         logger.debug("Created user: %s <%s>", smart_str(username), smart_str(email))
 
 
