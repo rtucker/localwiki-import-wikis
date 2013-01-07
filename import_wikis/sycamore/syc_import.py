@@ -250,6 +250,9 @@ class Formatter(sycamore_HTMLFormatter):
         result = ['<p%s>' % attr, '\n</p>'][not on]
         return '%s\n' % result
 
+    def strike(self, on):
+        return ['<strike>', '</strike>'][not on]
+
     def definition_list(self, on):
         attrs = ''
         if self.inline_edit_force_state is not None:
@@ -1528,7 +1531,7 @@ def is_image(filename):
 
 
 def process_user_element(element):
-    from django.contrib.auth.models import User
+    from django.contrib.auth.models import User, Group
     logger = logging.getLogger(__name__ + '.process_user_element')
 
     parent = element.getparent()
@@ -1554,6 +1557,8 @@ def process_user_element(element):
         if enc_password != '':
             u.password = enc_password
         u.save()
+        g = Group.objects.get(name="Authenticated")
+        u.groups.add(g)
         logger.debug("Created user: %s <%s>", smart_str(username), smart_str(email))
 
 
