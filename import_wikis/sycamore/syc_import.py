@@ -247,6 +247,9 @@ class Formatter(sycamore_HTMLFormatter):
         result = ['<p%s>' % attr, '\n</p>'][not on]
         return '%s\n' % result
 
+    def strike(self, on):
+        return ['<strike>', '</strike>'][not on]
+
     def definition_list(self, on):
         attrs = ''
         if self.inline_edit_force_state is not None:
