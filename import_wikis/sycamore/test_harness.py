@@ -26,6 +26,11 @@ content = """[[Image(DQBlizzard.png,right,thumbnail,300,noborder,"Blizzard Examp
 
 It had its grand opening on August 6, ["2012/Openings" 2012] and broke the U.S. franchise record for best opening day [[FootNote(http://www.democratandchronicle.com/article/20120807/LIVING/120807001/Dairy-Queen-opening-brings-crowd-Henrietta)]].
 
+ * A list goes here, so that
+ * behavior can be tested.
+
+The only thing that should appear below this line, in the HTML, are the footnotes.
+
 [[Comments]]
 ------
 ''2009-03-31 12:45:35'' [[nbsp]] Is the ACT program related to CODIP? (http://www.childrensinstitute.net/programs/CODIP/) They seem to be very similar.
@@ -57,6 +62,24 @@ Also, the website linked to on the ACT Program page doesn't even mention the ACT
 ''2012-09-07 11:24:52'' [[nbsp]] Here's a novel idea for people like alex-c: refrain from commenting on a location unless you've ACTUALLY BEEN THERE.  An informed opinion is certainly more constructive than an unbased one. --["Users/mbetush"]
 ------
 ''2012-09-07 12:09:54'' [[nbsp]] I agree, another novel idea is ignore his reviews because they seem to all be negative, I'm not crazy about chain restaurants either but I'm not above hitting one up for a quick bite, even if it's not locally-sourced or organic. Sometimes, I need the grease. --["Users/PDub"]
+------
+''2012-06-03 21:30:14'' [[nbsp]] Definitely slipping. Loved it a couple of years ago and the food has changed. Today the service at dinner was unbearably slow and there was a fruit fly infestation. Our party and those at neighboring tables were constantly swatting and clapping at pesky flies while we waited for our food. The grilled cheese and veggie sandwiches were very thin on filling-- mostly bread. The cigarillos, a previous favorite of our family, were rolled much more loosely and did not pack the same flavor. Soup was decent (pear and carrot) as was the seitan sandwich. Overall, a real let-down as I have felt the previous couple of visits. Ran into a friend driving along Marshall Street as we were headed into the restaurant and, interestingly, she just e-mailed me to say she doesn't enjoy this place like she used to. I don't know what changed but it definitely has lost its edge.
+ --["Users/jansu"]
+------
+''2011-11-23 17:19:10'' [[nbsp]] This is a review I originally posted on Yelp, updating a previous (and bad) experience with this vendor:
+
+Well, I never thought that I'd be patronizing this place again, but my company has a special deal with them for safety glasses, so I decided to use it. When I went to pick out my glasses, I was helped fairly quickly by a 'jittery' guy (didn't catch his name, but he couldn't sit still), who was helpful and thourough. He took all the measurements, told me it would be 7-10 days until they were ready, and I paid my co-pay.
+
+A week later, I got a call telling me that they were ready. I set aside an hour the next day, and went down to get them fitted. Boy, what a difference a week makes! Wheras the day I went to pick out my lenses I got good, fast service, the day I went to get fitted was a different story. I waited 10 minutes just to get through the receptionist, then waited another 45 minutes to get fitted. The glasses were done correctly, but I actually had to demand the side shields that were the whole reason for buying safety frames in the first place.
+
+All in all, I would have to say that I got what I paid for, but considering how little I paid, that's not really much of a compliment. They seem to be able to make lenses correctly now, but customer service is highly variable. I would suggest that you budget at LEAST 90 minutes for each trip there. Selection is merely good, nothing special. If it weren't for the special my company gives, I probably wouldn't bother using them. At least they've improved in the last 3 years.
+
+***Update***
+
+I went back for a second fitting the other day (the ear-holds weren't quite right from the first fitting-that's what happens when you rush it), and got better service then. I was also trying to figure out just how much lenses in my new prescription would be for my everyday glasses, and all I get is a vague answer of "about $90-something". Not quite sure why they can't just come out and give me a bona-fide price. I'll be checking to see if Wal-Mart optical can give me a better deal. At least they will quote me a final price.
+
+BTW, I got a call today from them asking if everything was OK with them. So, at least they are trying (at least a bit). I just wish they would get more people to serve customers in the store.
+ --["Users/Alex-C"]
 """
 
 content = reformat_wikitext(content)
@@ -64,12 +87,14 @@ html = render_wikitext(content, page_slug="Dairy_Queen", isolating_comments=True
 text, label, comments = isolate_comments(html)
 
 print "TEXT:", text
+print "--- END TEXT ---"
 print ""
-print "Label:", label
+print "Comment label:", label
 print ""
+print "Count of comments to follow:", len(comments)
 for dttm, userslug, content in comments:
     username = userslug.split('/')[1]
-    print username
-    print "COMMENT:", dttm, User.objects.get(username__iexact=username), content
+    print "COMMENT:", dttm, username, User.objects.get(username__iexact=username), content
 
 
+# The above blank lines are important.

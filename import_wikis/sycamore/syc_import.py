@@ -1225,6 +1225,7 @@ def parse_comment_list(elem_list):
         text = ''.join([etree.tostring(elem) for elem in elem_list])
         text = re.sub('<em>.+</em>( \&\#160\;)?', '', text)
         text = re.sub('\&\#8212\;</p>', '</p>', text)
+        text = tidy_html(text)
         return (dttm, user, text)
     except:
         return None
@@ -1247,7 +1248,7 @@ def isolate_comments(text):
     element_list = etree.HTML(text).find('body').getchildren()
     for element in element_list:
         if element.tag is 'p' and element.text is not None and 'XXXCOMMENTSXXX' in element.text:
-            # Jackpot
+            # Jackpot: we are in the comments section
             in_comments = True
             contents = element.text.strip()
             label = contents.split(' ', 1)[1]
@@ -1259,6 +1260,13 @@ def isolate_comments(text):
             elif element.tag == 'hr':
                 # May be the first one
                 pass
+            elif element.tag == 'ul' and in_a_comment:
+                # Sometimes, we end up with <ul> in comments, and those need
+                # to be dealt with, especially if they contain the username.
+                # We'll be lazy, though, and clobber them...
+                for ele in element.getchildren():
+                    if ele.tag == 'p':
+                        comment_list.append(ele)
             elif element.tag == 'p':
                 in_a_comment = True
                 comment_list.append(element)
