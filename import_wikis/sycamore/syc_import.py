@@ -1213,10 +1213,14 @@ def parse_comment_list(elem_list):
     # The last will have a <a> child with user information.
     first_children = elem_list[0].getchildren()
     last_children = elem_list[-1].getchildren()
+    if len(first_children) == 0 or len(last_children) == 0:
+        # Just a blank part
+        return None
     first_child = first_children[0]
     last_child = last_children[-1]
     if first_child.tag != 'em' or last_child.tag != 'a':
-        return None
+        # This isn't a comment!
+        return False
 
     try:
         dttm = dateutil.parser.parse(first_child.text)
@@ -1228,7 +1232,8 @@ def parse_comment_list(elem_list):
         text = tidy_html(text)
         return (dttm, user, text)
     except:
-        return None
+        # This isn't a comment!!
+        return False
 
 
 def isolate_comments(text):
@@ -1278,9 +1283,12 @@ def isolate_comments(text):
             if not in_a_comment and len(comment_list) > 0:
                 result = parse_comment_list(comment_list)
                 comment_list = []
-                if result is None:
+                if result is False:
                     # Freak out
                     in_comments = False
+                elif result is None:
+                    # Don't freak out
+                    continue
                 else:
                     comments.append(result)
 

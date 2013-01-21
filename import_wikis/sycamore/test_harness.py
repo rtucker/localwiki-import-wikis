@@ -55,6 +55,7 @@ Also, the website linked to on the ACT Program page doesn't even mention the ACT
 ------
 ''2012-08-01 21:28:04'' [[nbsp]] FWIW, I've been to DOZENS of DQ's in the midwest, south, and west coast. In most small towns, you either have a Sonic or a DQ (maybe a Rax) as the "2nd tier fast food place", usually down the road from the McD's or the Shoney's. In most of the Midwest, they are in the rear of a large gas-station/convenience store/fast food joint. There ain't NOTHIN' special about DQ, aside from their huge advertising budget. Just another place for people to stuff their faces with too much fat and sugar. --["Users/alex-c"]
 ------
+------
 ''2012-08-03 19:33:34'' [[nbsp]] OK, for all you people who just can't wait, it's open. So, somebody needs to go over there, sample their predictable wares, post a lackluster reviews so that Eileen and I can say "we TOLD you so". Please, somebody? --["Users/alex-c"]
 ------
 ''2012-08-07 12:30:26'' [[nbsp]] I've been to many DQ's and I enjoy the ice cream, it's ice cream not custard and really like the chocolate shell and sundaes.  No need to fight people.  Sure it's loaded with fat, sugar grease what have you but so is the beloved Garbage Plate and Abbott's.  Not like we are eating this stuff every day. Enjoy everyone!     --["Users/NewtonNola"]
